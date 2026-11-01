@@ -1,0 +1,18 @@
+# 不进镜像的东西：密钥、存档、日志、构建产物、本地虚拟环境
+.env*
+!.env.example
+settings.local.json*
+配对码.txt
+联机码.txt
+games/
+var/
+dist/
+reports/
+tests/tmp/
+tests/_profiles/
+_junk/
+__pycache__/
+*.pyc
+.git/
+.github/
+*.zip

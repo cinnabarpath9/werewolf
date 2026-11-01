@@ -690,6 +690,11 @@ class Room:
 
     def _load_or_make_token(self) -> str:
         import re as _re
+        # 云端部署（Render/Railway 这类容器）文件系统是临时的：每次重启都会生成新码，
+        # 手机上刚填的码就失效了。所以允许用环境变量钉死：WOLF_PAIR_CODE=ABCDEF。
+        env_code = (os.environ.get("WOLF_PAIR_CODE") or "").strip().upper()
+        if _re.fullmatch(r"[A-Z0-9]{6}", env_code):
+            return env_code
         path = os.path.join(HERE, "配对码.txt")
         try:
             with open(path, encoding="utf-8-sig") as fh:
