@@ -1070,6 +1070,89 @@ class Room:
         future = self.asks.pop(seat, None)
         if future is not None and not future.done():
             future.cancel()
+    # ---------- 托管（2026-11-02） ----------
+    #
+    # 玩家这一手不想自己想（或者根本不知道该怎么决策）时，点「托管」：
+    # **调用一次**单独配置的托管模型，看玩家自己的 packet（含他自己的发言与全场公示栏），
+    # 替玩家出一手，然后当成玩家的答案交给引擎。
+    def butler_client(self):
+        """按「设置 → 模型 API → 托管模型」选的那条 API 建一个客户端。返回 (client, 错误说明)。"""
+        local = settings_store.load(HERE)
+        cfg_b = local.get("butler") or {}
+        name = str(cfg_b.get("api") or "").strip().upper()
+        if not name:
+            return None, "还没配托管模型：设置 → 模型 API → 最下面「托管模型」选一条 API"
+        game = getattr(self, "game", None)
+        seat = next((s for s in (game.seats if game else []) if s.id == 1), None)
+        if seat is None:
+            class _Seat:                                  # resolve_profile 只要 id/role_key
+                id = 1
+                role_key = "villager"
+            seat = _Seat()
+        try:
+            spec = routing.resolve_profile(self.cfg, seat, name)
+        except Exception as exc:                          # noqa: BLE001
+            return None, f"托管模型「{name}」解析失败：{type(exc).__name__}: {exc}"
+        if not (spec.base_url and spec.api_key and spec.model):
+            return None, f"托管模型「{name}」缺 base_url / key / model，先去设置里补齐"
+        if cfg_b.get("temperature") is not None:
+            try:
+                spec.temperature = float(cfg_b["temperature"])
+            except (TypeError, ValueError):
+                pass
+        if cfg_b.get("max_tokens") is not None:
+            try:
+                spec.max_tokens = int(cfg_b["max_tokens"])
+            except (TypeError, ValueError):
+                pass
+        level = str(cfg_b.get("thinking") or "").strip().lower()
+        if level in ("off", "low", "high"):
+            from wolf.llm import THINKING_LEVELS_BY_STYLE     # noqa: PLC0415
+            spec.thinking = {g: {1: level} for g in ("speech", "decision", "aux")}
+            spec.thinking_style = routing.thinking_style_for(self.cfg, name)
+        try:
+            client = routing.build_client(spec, label=f"butler/{name}")
+        except Exception as exc:                          # noqa: BLE001
+            return None, f"托管模型「{name}」建客户端失败：{type(exc).__name__}: {exc}"
+        return client, ""
+
+    async def autopilot(self, ws, seat: int) -> None:
+        from wolf.context import Task                       # noqa: PLC0415
+        pending = self.pending_asks.get(int(seat))
+        if not pending:
+            self.send_to(ws, {"type": "notice", "text": "现在没有等你的行动，托管用不上。"})
+            return
+        client, err = self.butler_client()
+        if client is None:
+            self.send_to(ws, {"type": "notice", "text": "🤖 " + err})
+            return
+        self.send_to(ws, {"type": "notice", "text": "🤖 托管模型正在替你想这一手…"})
+        task = Task(kind=pending.get("kind") or "", text=pending.get("text") or "",
+                    schema=pending.get("schema") or "",
+                    legal=list(pending.get("legal") or []),
+                    extra=dict(pending.get("extra") or {}))
+        try:
+            action = await asyncio.wait_for(
+                LLMAgent(client, int(seat)).ask(pending.get("packet") or "", task),
+                timeout=180)
+        except Exception as exc:                          # noqa: BLE001
+            self.send_to(ws, {"type": "notice",
+                              "text": f"🤖 托管失败：{type(exc).__name__}: {exc}（你可以自己决策）"})
+            return
+        future = self.asks.get(int(seat))
+        if future is None or future.done():
+            self.send_to(ws, {"type": "notice", "text": "🤖 这一手已经答过了。"})
+            return
+        self.pending_asks.pop(int(seat), None)
+        if self.pending_ask is pending:
+            self.pending_ask = next(iter(self.pending_asks.values()), None)
+        future.set_result(dict(action or {}))
+        done = {"type": "ask_done", "seat": int(seat), "ask_id": pending.get("ask_id")}
+        for other in list(self.clients.keys()):
+            if self.viewer_seat(other) == int(seat):
+                self.send_to(other, done)
+        self.send_to(ws, {"type": "notice", "text": "🤖 托管已替你出完这一手（不满意可以下一手自己来）。"})
+
 
     def drop_ask(self, seat_id: int, future=None) -> None:
         """一手答完/超时之后清理（只清自己那一手，别误删同座位更新的一手）。"""
@@ -2225,6 +2308,12 @@ class Room:
                 self.stall_decision.set_result(action)
             else:
                 self.broadcast({"type": "notice", "text": "现在没有卡住的对局。"})
+        elif kind == "autopilot":
+            seat = self.viewer_seat(ws)
+            if not seat:
+                self.send_to(ws, {"type": "notice", "text": "只有坐座位的玩家才能托管。"})
+            else:
+                await self.autopilot(ws, seat)
         elif kind == "action":
             # ⚠️ 2026-10-08 修（自查发现的 P2-1，真协议缺陷）：
             #    客户端回传的 `ask_id` 以前**只被回显、从不校验**。断线时玩家在旧面板上
@@ -3570,6 +3659,7 @@ def _settings_payload(data: dict) -> dict:
         "apis": _api_rows(data),
         "seats": pub["seats"],
         "voice": pub["voice"],
+        "butler": pub.get("butler") or {},
         "token_required": True,
         # ⚠️ 2026-10-31 外部审查 S13：以前这里是**绝对路径**（含中文用户名目录），
         #    任何一次 GET 都能拿到；页面根本不用这个字段。现在只回文件名。
@@ -3683,6 +3773,31 @@ async def api_settings_seats(request: Request):
     settings_store.save(HERE, data)
     _apply_local_settings(data, f"已保存座位分配（{len(data['seats'])} 个座位），下一局生效", clear_missing=True)
     return JSONResponse(_settings_payload(data))
+
+
+@app.post("/api/settings/local/butler")
+async def api_settings_butler(request: Request):
+    """保存「托管模型」：选一条已配置的 API，玩家点托管时用它替玩家出一手。"""
+    if not client_ok(request):
+        return JSONResponse({"ok": False, "error": "缺少客户端标识"}, status_code=403)
+    body = await _read_json_body(request) or {}
+    problem = token_error(request, body)
+    if problem:
+        return JSONResponse({"ok": False, "error": problem}, status_code=401)
+    data = settings_store.load(HERE)
+    data["butler"] = {
+        "api": body.get("api") or "",
+        "thinking": body.get("thinking") or "",
+        "temperature": body.get("temperature"),
+        "max_tokens": body.get("max_tokens"),
+    }
+    try:
+        settings_store.save(HERE, data)
+    except Exception as exc:                              # noqa: BLE001
+        return JSONResponse({"ok": False, "error": f"保存失败：{exc}"}, status_code=500)
+    settings_store.apply(ROOM.cfg if ROOM else None, data, clear_missing=True)
+    saved = settings_store.load(HERE)["butler"]
+    return JSONResponse({"ok": True, "butler": saved})
 
 
 @app.post("/api/settings/local/voice")
@@ -4163,6 +4278,12 @@ def main() -> int:
     # （每台启动时都会把码写回去）—— 谁最后启动，文件里就是谁的码。
     # 这一行让"到底哪台实例认哪个码"可以直接从日志里对出来，不用猜。
     print(f"[token] 本实例认的配对码 = {ROOM.env_token}（端口 {args.port}）")
+    # ⚠️ 2026-11-02：云端免费档（Render free 等）**没有持久盘** —— 重启/休眠后
+    #    存档与页面设置都会丢。这不是 bug，是免费档的代价；提前说清楚，别让人打完一局才发现。
+    if str(os.environ.get("WOLF_EPHEMERAL") or "").strip() not in ("", "0", "false"):
+        print("⚠️ 本实例运行在**临时文件系统**上（WOLF_EPHEMERAL=1）：")
+        print("   · 存档、页面设置、语音缓存都**不会保留**，重启即丢；")
+        print("   · 想要留档请换付费档并挂持久盘（或改用自己电脑/Termux 跑）。")
     print("（Windows 第一次会弹防火墙，点允许；Ctrl+C 停止）")
     uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
     return 0

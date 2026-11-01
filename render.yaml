@@ -1,19 +1,20 @@
-# Render Blueprint：一键部署（Docker 运行时）
-# 用法：在 Render 里 New → Blueprint → 连这个仓库，它会照这份文件建服务。
-services:
-  - type: web
-    name: werewolf
-    runtime: docker
-    dockerfilePath: ./Dockerfile
-    plan: starter          # free 也能跑，但会休眠；starter 起才有常驻
-    healthCheckPath: /api/status
-    envVars:
-      - key: WOLF_PAIR_CODE
-        generateValue: false
-        sync: false        # 部署时手填 6 位配对码（不填就每次重启随机生成）
-      - key: PYTHONUNBUFFERED
-        value: "1"
-    disk:
-      name: werewolf-data
-      mountPath: /app/games
-      sizeGB: 1
+# Render Blueprint：一键部署（Docker 运行时）
+# 用法：Render → New → Blueprint → 连这个仓库，它会照这份文件建服务。
+#
+# ⚠️ 2026-11-02 作者定：**走免费计划**（free）。免费版没有持久盘 ⇒
+#    重启/休眠后**存档与页面设置会丢**，但"打开就能玩"这件事不受影响。
+#    想留档再加 disk（需要 starter 计划，约 $7/月）。
+services:
+  - type: web
+    name: werewolf
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    healthCheckPath: /api/status
+    envVars:
+      - key: WOLF_EPHEMERAL
+        value: "1"          # 启动时打印"存档不保留"的提示
+      - key: WOLF_PAIR_CODE
+        sync: false         # 部署时手填 6 位配对码；不填就每次重启随机生成
+      - key: PYTHONUNBUFFERED
+        value: "1"

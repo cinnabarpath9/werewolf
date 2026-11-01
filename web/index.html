@@ -970,6 +970,30 @@
           <div class="msg" id="apiMsg"></div>
         </div>
 
+        <div class="card" id="butlerCard">
+          <div class="card-head">
+            <b>托管模型</b>
+            <span class="sub">不想自己决策时，用它替你出一手</span>
+          </div>
+          <div class="field">
+            <span>用哪条 API</span>
+            <select id="butlerApi"></select>
+          </div>
+          <div class="field">
+            <span>托管时的思考档（留空=跟随这条 API）</span>
+            <select id="butlerThink">
+              <option value="">跟随 API</option>
+              <option value="off">off</option>
+              <option value="low">low</option>
+              <option value="high">high</option>
+            </select>
+          </div>
+          <div class="form-actions">
+            <button class="primary" id="butlerSave" type="button">保存托管设置</button>
+          </div>
+          <div class="msg" id="butlerMsg"></div>
+        </div>
+
         <div class="card" id="statsCard">
           <div class="card-head">
             <b>对局统计</b>
@@ -1633,10 +1657,48 @@ async function openSettings(tab) {
     SETTINGS.apis = data.apis || [];
     SETTINGS.seats = data.seats || {};
     SETTINGS.voice = data.voice || {};
+    SETTINGS.butler = data.butler || {};
     SETTINGS.loaded = true;
     renderSettings();
+    renderButler();
   } catch (err) {
     $('apiList').innerHTML = '<div class="empty">读取失败（网络不通）</div>';
+  }
+}
+
+function renderButler() {
+  const sel = $('butlerApi');
+  if (!sel) return;
+  const apis = SETTINGS.apis || [];
+  const cur = (SETTINGS.butler && SETTINGS.butler.api) || '';
+  sel.innerHTML = '<option value="">（不启用托管）</option>'
+    + apis.map(a => `<option value="${escapeHtml(a.id)}"${a.id === cur ? ' selected' : ''}>`
+      + escapeHtml(a.id) + (a.model ? ' · ' + escapeHtml(a.model) : '') + '</option>').join('');
+  const th = $('butlerThink');
+  if (th) th.value = (SETTINGS.butler && SETTINGS.butler.thinking) || '';
+}
+
+async function saveButler() {
+  const box = $('butlerMsg');
+  const api = $('butlerApi').value;
+  const thinking = $('butlerThink').value;
+  box.className = 'msg busy'; box.textContent = '保存中…';
+  try {
+    const res = await fetch('/api/settings/local/butler' + tokenQS(), {
+      method: 'POST',
+      headers: apiHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ api, thinking, token: sessionToken() }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.ok) {
+      box.className = 'msg bad'; box.textContent = data.error || ('HTTP ' + res.status);
+      return;
+    }
+    SETTINGS.butler = data.butler || {};
+    box.className = 'msg';
+    box.textContent = api ? '已保存：托管会用这条 API。' : '已关闭托管。';
+  } catch (err) {
+    box.className = 'msg bad'; box.textContent = '保存失败：' + ((err && err.message) || err);
   }
 }
 
@@ -2363,6 +2425,7 @@ $('apiReset').onclick = resetApiForm;
 $('apiSave').onclick = saveApi;
 $('apiTest').onclick = testApi;
 $('statsRefresh').onclick = loadStats;
+$('butlerSave').onclick = saveButler;
 $('apiName').addEventListener('keydown', (ev) => {
   if (ev.key === 'Enter') { ev.preventDefault(); saveApi(); }
 });
@@ -4002,6 +4065,17 @@ function renderAsk(f, ask) {
   const hint = document.createElement('p');
   hint.className = 'hint'; hint.textContent = ask.text;
   f.appendChild(hint);
+
+  // 2026-11-02：**托管这一手** —— 玩家不想自己判断时点它，服务端调「托管模型」
+  // 看这个座位的 packet（自己的发言 + 全场公示栏）替玩家出一手，然后照常发 ask_done。
+  // 面板先不收：托管失败（没配模型/上游挂了）会弹提示，玩家还能自己答。
+  const autoBtn = mkBtn('🤖 托管这一手（让托管模型替我决策）', () => {
+    if (autoBtn.disabled) return;
+    autoBtn.disabled = true; autoBtn.textContent = '🤖 托管正在想…';
+    send({ type: 'autopilot', ask_id: ask.ask_id });
+  }, 'ghost');
+  autoBtn.style.marginTop = '6px';
+  f.appendChild(autoBtn);
 
   const legal = ask.legal || [];
 

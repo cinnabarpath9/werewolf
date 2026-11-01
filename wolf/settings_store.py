@@ -70,7 +70,8 @@ _LOCK = threading.Lock()
 # --------------------------------------------------------------------------- #
 
 def empty() -> dict:
-    return {"version": 1, "apis": [], "seats": {}, "voice": {}}
+    #: `butler` = 托管模型（2026-11-02）：玩家不想自己决策时，调它替玩家出一手。
+    return {"version": 1, "apis": [], "seats": {}, "voice": {}, "butler": {}}
 
 
 def _text(value, limit: int) -> str:
@@ -176,7 +177,33 @@ def normalize(raw) -> dict:
                 continue
             data["seats"][str(seat)] = pid
     data["voice"] = normalize_voice(raw.get("voice"))
+    data["butler"] = normalize_butler(raw.get("butler"))
     return data
+
+
+def normalize_butler(raw) -> dict:
+    """托管模型的设置：`{api, thinking, temperature?, max_tokens?}`。
+
+    · `api` 必须是一条已配置 API 的标识（空 = 没开托管）；
+    · `thinking` 只认 off/low/high，别的丢掉（= 跟随该 API 自己的默认）；
+    · 数字项越界就丢（与「模型参数」页同一口径：不夹边界，免得用户以为生效了）。
+    """
+    if not isinstance(raw, dict):
+        return {}
+    out: dict = {}
+    try:
+        name = normalize_id(raw.get("api"))
+    except ValueError:
+        name = ""
+    if name:
+        out["api"] = name
+    level = str(raw.get("thinking") or "").strip().lower()
+    if level in THINKING_CHOICES:
+        out["thinking"] = level
+    tun = normalize_tuning({"temperature": raw.get("temperature"),
+                            "max_tokens": raw.get("max_tokens")})
+    out.update(tun)
+    return out
 
 
 # --------------------------------------------------------------------------- #
