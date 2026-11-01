@@ -1659,7 +1659,8 @@ async def main() -> int:
         #    闭卷集合，否则会被「上下文取不到就丢题」整批吞掉（见 pick_banks 里的注释）。
         hard3_bank, hard3_problems, hard3_note = load_hard3_bank(game)
     v2_bank, v2_problems, v2_note = (None, [], "")
-    if args.bank in ("auto", "both", "v2"):
+    if args.bank in ("both", "v2"):   # v2 是**显式选择**：auto 不带，免得改变老基准
+
         v2_bank, v2_problems, v2_note = load_v2_bank(game)
     # `--bank v2` 是「只跑 v2」：pick_banks 按 base 组一份空壳，下面把内容换掉
     pick_kind = "base" if args.bank == "v2" else args.bank
