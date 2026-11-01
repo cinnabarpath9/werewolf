@@ -1,0 +1,8 @@
+# 2026-11-02 Haiku 单测（52pay 不接受自定义 temperature → 不发）
+models:
+  - name: Haiku_hi
+    profile: HAIKU
+    temperature: null
+    max_tokens: 8000
+    extra_body:
+      reasoning_effort: high

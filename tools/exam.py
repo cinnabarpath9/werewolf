@@ -487,7 +487,7 @@ class Model:
     """一个被测模型（平台的 base_url / key 由 .env 或模型清单给出）。"""
 
     def __init__(self, name: str, base_url: str, api_key: str, model: str,
-                 extra_body: dict | None = None, temperature: float = 0.2,
+                 extra_body: dict | None = None, temperature: float | None = 0.2,
                  max_tokens: int = 4000, timeout: float = 300.0,
                  max_retries: int = 4) -> None:
         self.name = name
@@ -524,7 +524,9 @@ class Model:
         payload = {"model": self.model,
                    "messages": [{"role": "system", "content": system},
                                 {"role": "user", "content": prompt}],
-                   "temperature": self.temperature, "max_tokens": self.max_tokens}
+                   "max_tokens": self.max_tokens}
+        if self.temperature is not None:          # None = 这个通道不接受 temperature，别发
+            payload["temperature"] = self.temperature
         payload.update(self.extra_body)
         last_error = ""
         empty_reason = ""
@@ -814,7 +816,7 @@ def load_models(path: str) -> list[Model]:
         out.append(Model(name=name, base_url=base_url, api_key=api_key,
                          model=model_name,
                          extra_body=item.get("extra_body") or {},
-                         temperature=float(item.get("temperature", 0.2)),
+                         temperature=(None if item.get("temperature", 0.2) is None else float(item.get("temperature", 0.2))),
                          max_tokens=int(item.get("max_tokens", 4000)),
                          timeout=float(item.get("timeout", 300))))
     return out
@@ -1626,6 +1628,8 @@ async def main() -> int:
     parser.add_argument("--dry-run", action="store_true",
                         help="离线演练：用 3 个假模型跑完整流程（含标定 + 报告落盘），"
                              "不发任何真请求、不花作者的钱")
+    parser.add_argument("--limit", type=int, default=0,
+                        help="只跑前 N 道题（按题号顺序；0 = 全部）。测渠道时用它把卷子压短")
     parser.add_argument("--keep-retired", action="store_true",
                         help="把已退役的题（五家模型全对、见 tools/exam_retired.py）也跑一遍"
                              "—— 只用来考古/复算，正常考核别开（它们分不出模型、还花额度）")
@@ -1693,6 +1697,10 @@ async def main() -> int:
             bank = [q for q in bank if q.qid not in RETIRED]
             closed_qids = frozenset(q.qid for q in bank) & closed_qids if closed_qids else frozenset()
             print(f"退役题（五家全对，不再花额度）：{len(dropped)} 道 —— 见 tools/exam_retired.py")
+    if args.limit and args.limit > 0 and len(bank) > args.limit:
+        _kept = bank[:args.limit]
+        print(f"--limit {args.limit}：只跑前 {args.limit} 道（原 {len(bank)} 道）")
+        bank = _kept
     if problems:
         print("❌ 题库自检没过（引擎行为和题库答案不一致，先修题库）：")
         for p in problems:
