@@ -17,7 +17,7 @@
 
 llm:
   default:
-    profile: QIANFAN_GLM    # 兜底平台（2026-11-02：ds/glm 迁千帆；52pay 那把 GLM key 已失效）
+    profile: QIANFAN_DS     # 兜底平台（2026-11-02 作者定：兜底也用 DS）
                             # 可选档案（都在 .env 里，一把 key 一组）：
                             #   QWEN / GLM / DEEPSEEK  → api.52pay.com（统一中转）
                             #   HAIKU                 → api.52pay.com，claude-haiku-5-5（4/10 号用）

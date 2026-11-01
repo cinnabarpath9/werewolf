@@ -81,7 +81,7 @@ SANITIZE: dict[str, list[tuple[str, str]]] = {
         # ⚠️ 2026-11-02（作者拍板）：**发布包不带作者的个人阵容**。
         #    阵容是作者本机怎么分座位、用哪家模型、什么思考档 —— 那是个人玩的事；
         #    发出去只留一份「模板 config」，使用者按自己的渠道自己配。
-        (r'(?m)^    profile: QIANFAN_GLM.*$',
+        (r'(?m)^    profile: QIANFAN_DS.*$',
          '    profile: DEEPSEEK            # 兜底平台（模板值：用 .env 里的 DEEPSEEK 档案，按你的渠道改）'),
         (r'(?ms)^  seats:.*?(?=^  # 想换成别的平台)',
          """  seats: {}

@@ -277,7 +277,7 @@ check("1l 座位层不再手写思考参数（extra_body 里不许出现；要�
 #:   其实满血在想。现在 config 已改成 `off`（t_routing_config.py 3a 也随之恢复零问题）。
 #:   以后谁把 `off` 写成别的（或让 level_name 不认 `off`），这条立刻红。
 _ds_off = {"thinking": {"type": "disabled"}}
-_ds_seats = sorted(sid for sid, p in probes.items() if p["prof"] == "QIANFAN_DS")
+_ds_seats = sorted(sid for sid, p in probes.items() if p["prof"] == "QIANFAN_DS" and sid != 6)
 _ds_now = {sid: probes[sid]["de"] for sid in _ds_seats}
 #: 1m 座位 2/8（DEEPSEEK）的**发言与决策参数**必须正好等于「本座位档位 × 该档案风格」该发的那组。
 #:   ⚠️ 2026-10-15：作者把 2/8 由 off（关）改成 low（中）——依据：34 道终版卷 中 76% > 高 74% > 关 62%
