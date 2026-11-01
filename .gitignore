@@ -1,0 +1,43 @@
+# 密钥与本地数据：绝对不要提交
+# ⚠️ 2026-10-08 改成 `.env*` 通配：以前只挡 `.env` 与 `.env.bak` 两个**精确名字**，
+#    `.env.bak_deepseek_xxx` 这类带后缀的备份漏在外面（那里面也有 key）。
+#    `.env.example` 是模板、要入库，所以单独放行。
+.env*
+!.env.example
+配对码.txt
+联机码.txt
+
+# 页面「设置」保存的 API / 座位 / 语音（和 .env 一样含明文 key）
+settings.local.json
+settings.local.json.bak
+
+# 个人对局记录与跨局经验
+games/
+experience/
+
+# 语音合成的缓存（一句话一个 mp3，避免重复花钱）
+voice_cache/
+
+# Python
+__pycache__/
+*.pyc
+
+# 运行期产物（2026-10-07 整理后）
+var/
+reports/
+dist/
+tests/_logs/
+tests/_profiles/
+tests/legacy/
+# 页面测试的临时目录（两个 config 与里面的存档都是脚本运行时现写的，见 t_human_timeout.py / t_page_review.py）
+tests/_tmp_review/
+
+# 前端内联 JS 的**生成物**（tests/extract_js.py 生成；不要提交，否则每次改前端都进 diff）
+index_inline.js
+tests/index_inline.js
+
+# 测试自己的临时目录（check_deal_seed / check_save_rules 往里写存档）
+tests/tmp/
+
+# 测试临时输出（跑一次就生成，别入库）
+/tests/tmp_*

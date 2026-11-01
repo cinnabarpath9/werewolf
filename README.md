@@ -1,0 +1,121 @@
+# AI 狼人杀 · Werewolf
+
+**你坐一个座位，其余座位由大模型扮演。**
+
+[![下载最新版](https://img.shields.io/github/v/release/cinnabarpath9/werewolf?style=flat-square&label=%E4%B8%8B%E8%BD%BD%E6%9C%80%E6%96%B0%E7%89%88&color=2ea44f)](https://github.com/cinnabarpath9/werewolf/releases/latest)
+[![爱发电](https://img.shields.io/badge/%E7%88%B1%E5%8F%91%E7%94%B5-%E6%84%9F%E8%B0%A2%E8%B5%9E%E5%8A%A9-ff7ab2?style=flat-square)](https://afdian.com/a/langrensha)
+[![QQ 群](https://img.shields.io/badge/QQ%E7%BE%A4-%E5%8A%A0%E7%BE%A4%E4%BA%A4%E6%B5%81-12b7f5?style=flat-square)](https://qm.qq.com/q/68VcRJr3Py)
+[![许可](https://img.shields.io/badge/%E8%AE%B8%E5%8F%AF-%E9%9D%9E%E5%95%86%E4%B8%9A%E6%BA%90%E7%A0%81%E5%8F%AF%E8%A7%81-2ea44f?style=flat-square)](LICENSE)
+
+> ☕ **[爱发电 · 感谢赞助](https://afdian.com/a/langrensha)**　·　💬 **[加入 Q 群交流](https://qm.qq.com/q/68VcRJr3Py)**　·　⬇ **[夸克网盘](https://pan.quark.cn/s/00bf04be5c63)** / **[百度网盘](https://pan.baidu.com/s/1WfrytBb-xyHMDLlZUIN9Hw)**（提取码 `vv9n`）
+
+服务跑在自己电脑上，手机或电脑浏览器打开就能玩。内置完整规则引擎、信息隔离、语音（AI 发言念出来、
+你也能说话输入）、逐次调用的完整留痕与复盘。没有 API key 也能先用「离线演练」打一局。
+
+![大厅](assets/screenshot-home.jpg)
+
+> **怎么装、怎么配、手机连不上、想换端口、想升级** → 看 **[`部署说明.md`](部署说明.md)**。
+> 这份 README 只回答「它是什么、能干嘛」。
+
+---
+
+## 1. 它能做什么
+
+- **真规则、真流程**：四张内置板子；警长竞选、遗言、投票 PK、狼人自爆、女巫/摄梦人/守卫的「奶穿」等细节
+  都按项目口径实现，不是一个聊天套壳。
+- **信息隔离**：每个 AI 只拿到自己该看到的那一份（公开信息、狼队夜间讨论、自己的私有笔记）。
+  夜里不会向手机泄露「几号在思考」。
+- **每个座位可以用不同的模型**：不同平台、不同 key、不同模型、不同温度，可以混搭。
+- **语音**：AI 发言可以按顺序念出来；你也能按住麦克风说话（需 HTTPS 或 localhost，见部署说明 §7）。
+- **完整复盘**：每次调用都留痕，能看到当时的上下文包、完整思维链、token 与耗时。
+- **一台主机、多人加入**：朋友用浏览器加入、各自坐一个座位；每个真人只看到自己的底牌与行动面板。
+- **离线可玩**：没有 API key 也能用离线演练打完整一局，零成本验证规则。
+
+| 大厅 | 选板子 |
+| --- | --- |
+| ![大厅](assets/screenshot-home.jpg) | ![板子](assets/screenshot-boards.jpg) |
+
+| 设置 · 模型 API | 设置 · 座位分配 |
+| --- | --- |
+| ![模型](assets/screenshot-settings.jpg) | ![座位](assets/screenshot-seats.jpg) |
+
+| 联机房间（一台主机，朋友加入） |
+| --- |
+| ![联机房间](assets/screenshot-room.png) |
+
+---
+
+## 2. 三步开始
+
+```powershell
+# 1) 解压 zip，进目录
+# 2) 双击 start.bat（Windows）/ bash start.sh（macOS、Linux）
+# 3) 浏览器打开 http://127.0.0.1:8077，配对码在 配对码.txt 里
+```
+
+然后：设置 → 模型 API 填一条（地址 + 模型名 + key）→ 座位分配全选它 → 回大厅「开始游戏」。
+
+**不想填 API？** 选板子页勾「离线演练」，直接开一局，不联网也不花钱。
+
+装不上、手机连不上、想换端口、想升级、想看日志 → 全部在 **[`部署说明.md`](部署说明.md)**：
+它按「装 → 配 → 连 → 升级 → 排障」排好了，还带一张 16 条的故障对照表。
+
+---
+
+## 3. 四张内置板子
+
+| 板子 | 人数 | 规则 |
+| --- | --- | --- |
+| **`eleven_wolfking`（默认）** | 11 | 3 狼 + 1 狼王 + 预言家/女巫/摄梦人/愚者 + 守墓人/养鸦人/幸运儿。首夜无刀，屠边 |
+| `twelve_standard` | 12 | 4 狼 + 预言家/女巫/猎人/愚者 + 4 民。屠边，有警长竞选 |
+| `nine_all` | 9 | 3 狼 + 预言家/女巫/猎人 + 3 民。屠城，暗牌，无警长 |
+| `six_all_reveal` | 6 | 2 狼 + 预言家/女巫 + 2 民。屠城 + 出局亮身份 |
+
+- 11 / 12 人板自动开警长竞选；9 / 6 人板没有。
+- 换默认板子、自定义板子（`config.yaml` 的 `game.board` / `game.boards`）见 `部署说明.md` §6。
+- 完整规则口径（遗言、死因公示、弃权、平票、控场判据等）**以 `content/01_规则书.md` 为唯一一份**，
+  其它文档只做引用，不重复抄规则。
+
+---
+
+## 4. 手机 / 一台主机多人玩
+
+- **手机当你的手**：同一 Wi-Fi 打开 `http://<电脑局域网IP>:8077`，填配对码即可。
+- **朋友一起玩**：主机开「联机房间」，把**联机码**或邀请链接发给朋友，他们填名字、坐下、等开局。
+  没坐人的座位由 AI 扮演，主机自己也可以当观众。
+- 只有**同一局域网 / 同一个 Tailscale 网络**内可用；没有公网房间列表、没有账号系统。
+- 安卓手机也能当主机（Termux），但 **iPhone / iPad 不能当主机**，只能当玩家。
+
+细节（两把钥匙的区别、HTTPS 与麦克风、掉线重连）都在 `部署说明.md` §7–§9。
+
+---
+
+## 5. 已知边界
+
+- 单房间：同一时刻只能开一局；不支持多房间大厅。
+- 联机只做**同一局域网 / 同一 Tailscale 网络**：没有公网房间列表、账号系统、自动 NAT 穿透。
+- 手机当主机只支持**安卓 + Termux**；iPhone / iPad 不能当主机，只能当浏览器玩家。
+- 安卓被系统限制后台时，锁屏久了服务可能被杀；建议插电并关闭 Termux 的电池优化。
+- 没有丘比特 / 盗贼这类花板子，也没有剧本杀模式。
+- 语音依赖第三方 TTS/ASR 服务（默认按通义千问的接口形状实现），不配就纯文字。
+- AI 的行为质量取决于你接的模型；换模型前建议先跑 `python tools/test_boards.py` 看板子自检。
+
+---
+
+## 6. 开源与反馈
+
+- 协议：**源码可见 + 非商业**（免费玩、免费私下改；**禁止商用**；对外发布/二次开源需授权），见 [`LICENSE`](LICENSE)。
+- 想改代码：先读「目录结构」与 `content/00_阅读指南.md`（哪份文档管什么、改了要同步谁），
+  再动 `wolf/` 与 `web/`。打包用 `python tools/build_release.py --flavor desktop|android --zip`，
+  打包后的自检用 `python tools/check_release.py dist/<包>.zip`。
+- 想改首页右下角的链接：编辑 `web/site.json`（`repo` / `qq_group` / `qq_link` / `author` / `version`，留空就不显示）。
+
+```json
+{
+  "repo": "https://github.com/your-name/werewolf",
+  "qq_group": "123456789",
+  "qq_link": "https://qm.qq.com/q/xxxxxx",
+  "author": "your-name",
+  "version": "1.0.0"
+}
+```

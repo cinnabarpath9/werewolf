@@ -1,0 +1,19 @@
+# 修题后复跑（作者 2026-10-11 拍板）：只跑两条快臂，看 Z205 补齐收益口径后会不会改选愚者、
+# Z202 答案键改正后（期望 2）模型本来答 2 是不是就算对了。
+# 火山套餐按请求次数计费 ⇒ 两条臂 22 次请求，边际花费≈0。
+models:
+  - name: GLM-高-修题后
+    profile: ARK
+    model: glm-5.3-flash
+    temperature: 0.2
+    max_tokens: 16000
+    extra_body:
+      thinking: {type: enabled}
+      reasoning_effort: high
+  - name: DS-高-修题后
+    profile: DEEPSEEK
+    temperature: 0.2
+    max_tokens: 20000
+    extra_body:
+      thinking: {type: enabled}
+      reasoning_effort: high

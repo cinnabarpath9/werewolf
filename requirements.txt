@@ -1,0 +1,15 @@
+# 引擎与命令行（run_game.py / verify_isolation.py / tools/*）只需要这两行
+httpx>=0.27
+PyYAML>=6.0
+
+# 手机端服务（python server.py）还要这三个 —— 2026-10-08 补：
+#   以前这两行里没有它们，新机器照 README 装完会在 `import fastapi` 那里失败。
+#   fastapi → Web 框架；uvicorn → ASGI 服务器；websockets → uvicorn 的 WS 实现
+#   （starlette 是 fastapi 的依赖，会自动装上，不必单列）
+fastapi>=0.110
+uvicorn>=0.27
+websockets>=12.0
+
+# 语音（可选）：TTS 用 DashScope 官方 SDK。
+# 不装也能玩纯文字局（wolf/voice.py 是延迟导入）；要用「AI 念出来」就装上。
+dashscope>=1.20

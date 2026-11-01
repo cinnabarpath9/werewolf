@@ -1,0 +1,48 @@
+# 笔试考核清单：**剩下 4 个**（DS / Doubao / Haiku / MiMo）
+#
+# 为什么单独一个文件：GLM 已经**另外单跑一轮**（`--only GLM`），两轮的逐题结果我会合并成
+# 5 模型对比表。这里只放剩下 4 个，避免重复跑 GLM（作者 2026-10-11 明确要求不要重复）。
+#
+#   DS    DeepSeek-V4.1-Flash（火山方舟）    Doubao Doubao-Seed-2.1-lite（火山方舟）
+#   Haiku claude-haiku-5-5（快米兔单模型通道，key 在作者桌面 txt 里）
+#   MiMo  mimo-v2.6-flash（小米自家站）
+#
+# ⚠️ Qwen 本轮不考（作者要求先停）：它在上一轮暴露了两个问题 ——
+#   · 格式失败：X/S/V/检索几组判 0/10、0/9，原因是"题号没在回复里找到"（实战里同样致命：
+#     引擎要 JSON 字段，格式不对动作会被兜底改随机）；
+#   · 慢：一组 10 题 481s / 298s / 231s（GLM 同组 5~15s）⇒ 真局里可能顶到 450s 的 call_timeout。
+#   它的完整成绩单要单独跑（`python tools/exam.py --bank both --only Qwen --dump ...`）。
+#
+# ⚠️ 端点与 key 只从环境变量取（`<PROFILE>_BASE_URL` / `<PROFILE>_API_KEY`）；
+#    Haiku 跑之前导出 `HAIKU_BASE_URL` / `HAIKU_MODEL` / `HAIKU_API_KEY`。
+# 温度统一 0.2；每个渠道给它的"高思考强度"参数（名字按 `wolf/llm.py` 的 THINKING_LEVELS_BY_STYLE）。
+models:
+  - name: DS
+    profile: DEEPSEEK
+    temperature: 0.2
+    max_tokens: 20000
+    extra_body:
+      thinking: {type: enabled}
+      reasoning_effort: high
+
+  - name: Doubao
+    profile: ARK
+    temperature: 0.2
+    max_tokens: 16000
+    extra_body:
+      thinking: {type: enabled}
+      reasoning_effort: high
+
+  - name: Haiku
+    profile: HAIKU
+    temperature: 0.2
+    max_tokens: 16000
+    extra_body:
+      reasoning_effort: high
+
+  - name: MiMo
+    profile: MIMO
+    temperature: 0.2
+    max_tokens: 16000
+    extra_body:
+      thinking: {type: enabled}

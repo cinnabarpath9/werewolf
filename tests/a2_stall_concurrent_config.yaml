@@ -1,0 +1,21 @@
+# 只给 a2_t_stall_concurrent.py 用的临时配置：假上游只让"投票"批次失败。
+game:
+  board: eleven_dream      # 9 人板已删（2026-10-09），换成默认板子
+  max_days: 1
+  save_dir: tests/tmp/games_a2
+  human_timeout: 60
+  stall_timeout: 20            # 故意调小：不然要等 30 分钟才看得出"没人应答"的效果
+  personas_dir: ""
+  experience: false
+
+llm:
+  default:
+    base_url: http://127.0.0.1:8098/v1
+    api_key_env: FAKE_KEY
+    model: fake-model
+    timeout: 5
+    max_retries: 4
+    temperature: 1.0
+    max_tokens: 400
+    thinking: off
+    extra_body: {}

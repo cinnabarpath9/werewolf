@@ -1,0 +1,24 @@
+# DS 三档在「修题后」那一版卷子上的决胜跑（作者 2026-10-11 决定 DS 用哪档）
+# 背景：未修题那版 DS-中/低=77%、DS-高=73%；修题后 DS-高=81%（决策 100%），
+#       所以要同卷比一次才算数。火山套餐按请求次数 ⇒ 33 次请求，边际花费≈0。
+models:
+  - name: DS-高-固定卷
+    profile: DEEPSEEK
+    temperature: 0.2
+    max_tokens: 20000
+    extra_body:
+      thinking: {type: enabled}
+      reasoning_effort: high
+  - name: DS-中-固定卷
+    profile: DEEPSEEK
+    temperature: 0.2
+    max_tokens: 20000
+    extra_body:
+      thinking: {type: enabled}
+      reasoning_effort: low
+  - name: DS-关-固定卷
+    profile: DEEPSEEK
+    temperature: 0.2
+    max_tokens: 20000
+    extra_body:
+      thinking: {type: disabled}

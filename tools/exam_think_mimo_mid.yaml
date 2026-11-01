@@ -1,0 +1,9 @@
+# MiMo 中档跑分（作者 2026-10-11 拍板）：看砍掉一半思考到底掉几分
+# 参数用 `budget_tokens: 8192`（实测思考 26,562 → 7,912 字、167s → 70s，四档都正常出正文）
+models:
+  - name: MiMo-中档8192
+    profile: MIMO
+    temperature: 0.2
+    max_tokens: 32000
+    extra_body:
+      thinking: {type: enabled, budget_tokens: 8192}

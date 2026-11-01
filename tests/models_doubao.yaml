@@ -1,0 +1,7 @@
+# 临时清单：只测 doubao 家族（lite 这把 key 调不到，先把 turbo/pro 两个能调的测齐）
+models:
+  - name: Doubao-pro（doubao-seed-2.1-pro）
+    profile: DOUBAO
+    model: doubao-seed-2.1-pro
+    temperature: 0.2
+    max_tokens: 16000

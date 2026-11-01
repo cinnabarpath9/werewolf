@@ -1,0 +1,11 @@
+# a4 审查用：故意指向一个**本机不可达端口**（127.0.0.1:9），
+# 用来验证 tools/exam.py 在"所有模型连通性预检都失败"时会不会仍然退出 0。
+# 不涉及任何付费 API：连接会被本机立刻拒绝。
+models:
+  - name: a4-unreachable
+    base_url: http://127.0.0.1:9/v1
+    api_key_env: QWEN_API_KEY
+    model: a4-test-model
+    temperature: 0.2
+    max_tokens: 64
+    timeout: 3

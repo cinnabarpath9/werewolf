@@ -1,0 +1,12 @@
+# GLM 5.3 的 low 档补测（作者 2026-10-12：本轮一直没测过 GLM 中档）
+# 卷子 = `--bank hard` 的 26 道复杂题 / 11 组（当前题库已含 Z202/Z205/J08 三道修好的题）
+# 已有对照：GLM-高（修题后）96% / 25s / 15,523 tok；GLM-空档（什么都不发）62% / 192s / 201,294 tok
+models:
+  - name: GLM-中档low
+    profile: ARK
+    model: glm-5.3-flash
+    temperature: 0.2
+    max_tokens: 16000
+    extra_body:
+      thinking: {type: enabled}
+      reasoning_effort: low

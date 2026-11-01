@@ -1,0 +1,146 @@
+# J2 三档考核：5 家 × 3 档 = 15 臂（2026-10-13，作者授权）
+#
+# 目的：验「**换成模糊信息后，高思考会不会反将一军**」。卷子 = `--bank hard`
+# （退役过滤后 34 道 / 19 次调用），其中 J201~J208 是第三批「真实复盘取材的模糊信息判断题」。
+#
+# ⚠️ 档位参数**照抄** `wolf/llm.py::THINKING_LEVELS_BY_STYLE` 的对应风格表，
+#    一字不改；只有「哪一档」是这里选的。逐家对应关系：
+#      · GLM  glm-5.3-flash（火山 ARK 端点）→ `glm` 表
+#             关 = **extra_body 什么都不发**（火山不接受 thinking.type=disabled，
+#                  会 400；不发 = 落到平台默认 = 表现为"狂想"）。
+#                  ⚠️ 这不是笔误、也不是漏配：作者明确要求保留这一臂（它正是三档之一）。
+#      · 豆包 Doubao-Seed-2.1-lite（火山 ARK）→ `ark` 表
+#      · DS   DeepSeek-V4.1-Flash（火山）→ **`ark` 表**
+#             （依据 `config.yaml` 的 `llm.thinking_style`：`DEEPSEEK -> ark`）
+#      · Haiku claude-haiku-5-5（快米兔）→ `openai` 表
+#      · MiMo  mimo-v2.6-flash（小米自家站）→ `mimo` 表
+#             高档 = **只发 thinking.type=enabled，不带 reasoning_effort**
+#             （我们实测四档都生效；`reasoning_effort` 反而是中档，见 llm.py 注释）
+#
+# 温度统一 0.2、max_tokens 沿用 `exam_models_6.yaml`（GLM/豆包/Haiku/MiMo 16000、DS 20000）：
+# **同一模型三档共用同一套预算**，否则 token 上限会和档位差异混在一起。
+#
+# endpoint / key 一律从 `.env` 取（`<PROFILE>_BASE_URL` / `<PROFILE>_API_KEY`），
+# 本文件里不写 key。GLM/豆包/DS 共用 ARK 的端点与 key，只用 `model:` 区分型号。
+models:
+  # ── GLM glm-5.3-flash ────────────────────────────────────────────────
+  - name: GLM-关
+    profile: ARK
+    model: glm-5.3-flash
+    temperature: 0.2
+    max_tokens: 16000
+    extra_body: {}                       # 关档 = 什么都不发（火山关不掉）
+
+  - name: GLM-中
+    profile: ARK
+    model: glm-5.3-flash
+    temperature: 0.2
+    max_tokens: 16000
+    extra_body:
+      thinking: {type: enabled}
+      reasoning_effort: low
+
+  - name: GLM-高
+    profile: ARK
+    model: glm-5.3-flash
+    temperature: 0.2
+    max_tokens: 16000
+    extra_body:
+      thinking: {type: enabled}
+      reasoning_effort: high
+
+  # ── 豆包 Doubao-Seed-2.1-lite ────────────────────────────────────────
+  - name: 豆包-关
+    profile: ARK
+    model: Doubao-Seed-2.1-lite
+    temperature: 0.2
+    max_tokens: 16000
+    extra_body:
+      thinking: {type: disabled}
+
+  - name: 豆包-中
+    profile: ARK
+    model: Doubao-Seed-2.1-lite
+    temperature: 0.2
+    max_tokens: 16000
+    extra_body:
+      thinking: {type: enabled}
+      reasoning_effort: low
+
+  - name: 豆包-高
+    profile: ARK
+    model: Doubao-Seed-2.1-lite
+    temperature: 0.2
+    max_tokens: 16000
+    extra_body:
+      thinking: {type: enabled}
+      reasoning_effort: high
+
+  # ── DS DeepSeek-V4.1-Flash ──────────────────────────────────────────
+  - name: DS-关
+    profile: DEEPSEEK
+    temperature: 0.2
+    max_tokens: 20000
+    extra_body:
+      thinking: {type: disabled}
+
+  - name: DS-中
+    profile: DEEPSEEK
+    temperature: 0.2
+    max_tokens: 20000
+    extra_body:
+      thinking: {type: enabled}
+      reasoning_effort: low
+
+  - name: DS-高
+    profile: DEEPSEEK
+    temperature: 0.2
+    max_tokens: 20000
+    extra_body:
+      thinking: {type: enabled}
+      reasoning_effort: high
+
+  # ── Haiku claude-haiku-5-5（openai 风格）────────────────────────────
+  - name: Haiku-关
+    profile: HAIKU
+    temperature: 0.2
+    max_tokens: 16000
+    extra_body:
+      reasoning_effort: none
+
+  - name: Haiku-中
+    profile: HAIKU
+    temperature: 0.2
+    max_tokens: 16000
+    extra_body:
+      reasoning_effort: low
+
+  - name: Haiku-高
+    profile: HAIKU
+    temperature: 0.2
+    max_tokens: 16000
+    extra_body:
+      reasoning_effort: high
+
+  # ── MiMo mimo-v2.6-flash（mimo 风格）────────────────────────────────
+  - name: MiMo-关
+    profile: MIMO
+    temperature: 0.2
+    max_tokens: 16000
+    extra_body:
+      thinking: {type: disabled}
+
+  - name: MiMo-中
+    profile: MIMO
+    temperature: 0.2
+    max_tokens: 16000
+    extra_body:
+      thinking: {type: enabled}
+      reasoning_effort: low
+
+  - name: MiMo-高
+    profile: MIMO
+    temperature: 0.2
+    max_tokens: 16000
+    extra_body:
+      thinking: {type: enabled}

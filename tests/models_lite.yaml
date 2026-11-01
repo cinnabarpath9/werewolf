@@ -1,0 +1,7 @@
+# 临时清单：单测火山方舟上的 Doubao-Seed-2.1-lite
+models:
+  - name: Doubao-lite（Doubao-Seed-2.1-lite @ 火山方舟）
+    profile: ARK                # .env: ARK_BASE_URL / ARK_API_KEY
+    model: Doubao-Seed-2.1-lite
+    temperature: 0.2
+    max_tokens: 16000
