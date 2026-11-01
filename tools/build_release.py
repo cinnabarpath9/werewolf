@@ -78,6 +78,18 @@ SANITIZE: dict[str, list[tuple[str, str]]] = {
         # 作者自己的 https 提示地址（Tailscale 域名），别人装上不该看到
         (r'(?m)^public_https_base:.*$',
          'public_https_base: ""          # 留空即可；要提示条就写 .env 的 WOLF_PUBLIC_HTTPS_BASE'),
+        # ⚠️ 2026-11-02（作者拍板）：**发布包不带作者的个人阵容**。
+        #    阵容是作者本机怎么分座位、用哪家模型、什么思考档 —— 那是个人玩的事；
+        #    发出去只留一份「模板 config」，使用者按自己的渠道自己配。
+        (r'(?m)^    profile: QIANFAN_GLM.*$',
+         '    profile: DEEPSEEK            # 兜底平台（模板值：用 .env 里的 DEEPSEEK 档案，按你的渠道改）'),
+        (r'(?ms)^  seats:.*?(?=^  # 想换成别的平台)',
+         """  seats: {}
+  # ↑ 发布包**不带任何阵容**：11 个座位全部跟随上面的 llm.default。
+  #   想按座位分模型，在 seats 下加：`1: { profile: 你的档案名, thinking: low }`；
+  #   档案名在 .env 里定义（<档案名>_BASE_URL / <档案名>_API_KEY / <档案名>_MODEL）。
+
+"""),
     ],
 }
 
