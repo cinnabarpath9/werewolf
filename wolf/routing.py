@@ -561,8 +561,13 @@ def problems(cfg: dict, seats) -> list[str]:
                     bad_seats.append(k)
             except (TypeError, ValueError):
                 bad_seats.append(k)
+        # ⚠️ 2026-11-02：**多出来**的座位（比如 11 人局的摆放去跑 6 人板）不算错误 ——
+        # 只忽略、不挡开局。以前这里是硬错误，于是"改小板子"直接被拦死（作者实测：
+        # 6 人板报「llm.seats 里有本局不存在的座位号 [7..11]」）。
+        # 仍然要拦的是**非数字键**（那是真写错了，比如 `seats: {一号: ...}`）。
+        bad_seats = [k for k in bad_seats if not str(k).strip().isdigit()]
         if bad_seats:
-            issues.append(f"llm.seats 里有本局不存在的座位号：{bad_seats}"
+            issues.append(f"llm.seats 里有无法识别的座位号：{bad_seats}"
                           f"（本局座位：{sorted(seat_ids)}）")
     tables: list[tuple[str, object]] = [("llm.thinking", llm.get("thinking"))]
     roles_map = roles_map_raw if isinstance(roles_map_raw, dict) else {}

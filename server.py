@@ -1449,10 +1449,17 @@ class Room:
         （配置写成 `roles: 9` 会抛 TypeError）—— 异常一路逃到最外层，
         只把 WebSocket 关掉、**一条提示都不发**：用户看到的是"点了开始没反应"。
         """
-        try:
-            seat_no = int(human_seat or 1)
-        except (TypeError, ValueError):
-            seat_no = 1
+        # ⚠️ 2026-11-02：`human_seat: 0` 是**全 AI**（config 里也是这个语义，
+        #    run_game --human 0 同理）。以前写成 `int(human_seat or 1)`，0 是假值 ⇒
+        #    被悄悄改成 1 号真人，于是"全 AI 跑一局"永远卡在等人。
+        #    没传这个字段（老页面/脚本）仍然按 config 的 human_seat 走。
+        if human_seat is None or human_seat == "":
+            seat_no = int(self.human_seat)
+        else:
+            try:
+                seat_no = int(human_seat)
+            except (TypeError, ValueError):
+                seat_no = int(self.human_seat)
         try:
             return await self.start(bool(mock), seat_no, int(seed or 0), board,
                                     human_seats=human_seats, multiplayer=multiplayer)
@@ -1477,8 +1484,14 @@ class Room:
         # ---- 联机：真人座位集合 ----
         # 单人局走旧口径（human_seat 一个座位）；联机局用玩家实际认领的座位。
         if human_seats is None:
-            seat_no = max(1, min(len(board_def.roles), int(human_seat or 1)))
-            human_set = {seat_no}
+            # ⚠️ 2026-11-02：`human_seat: 0` = **全 AI**（与 config / run_game 同语义）。
+            # 以前这里 `max(1, ...)` 会把 0 抬成 1 号真人，于是"全 AI 跑一局"永远卡在等人。
+            if int(human_seat or 0) <= 0:
+                seat_no = 0
+                human_set = set()
+            else:
+                seat_no = max(1, min(len(board_def.roles), int(human_seat)))
+                human_set = {seat_no}
         else:
             try:
                 human_set = sorted({int(x) for x in human_seats if int(x or 0) > 0})

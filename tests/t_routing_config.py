@@ -59,7 +59,14 @@ bad = {"llm": {"default": {"profile": "GLM"},
                "seats": {12: {"profile": "GLM"}}}}
 issues = routing.problems(bad, seats)
 check("2a 角色名拼错被报出", any("seeer" in x for x in issues), str(issues)[:100])
-check("2b 座位号越界被报出", any("12" in x for x in issues), str([x for x in issues if "12" in x])[:90])
+# ⚠️ 2026-11-02：**越界的数字座位不再算错误**（11 人阵容跑 6 人板是正常用法，
+#    以前在这里挡死，见历史日志 §99）。仍然要报的是**非数字键**。
+check("2b 越界的数字座位被忽略（不再挡开局）", not any("12" in x for x in issues),
+      str([x for x in issues if "12" in x])[:90])
+bad2 = {"llm": {"default": {"profile": "GLM"},
+                "seats": {"一号": {"profile": "GLM"}}}}
+issues2 = routing.problems(bad2, seats)
+check("2c 非数字座位键仍然被报出（真写错了）", any("一号" in x for x in issues2), str(issues2)[:90])
 
 print("\n=== 三、真实配置不误报 ===")
 cfg = yaml.safe_load(io.open(ROOT + "/config.yaml", encoding="utf-8").read())
