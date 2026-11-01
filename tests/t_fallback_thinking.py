@@ -116,8 +116,8 @@ check("1a 生产 config 里 DEEPSEEK 登记为 ark 风格；且 ark / mimo / glm
       f"ark.low={levels_for('ark')['low']} mimo.low={levels_for('mimo')['low']}")
 
 _mine5 = probe_primary(CFG, 5)
-check("1b 座位 5（MIMO + low）主档发的是 mimo 的 low",
-      _mine5 == SAVE_DS_LOW, str(_mine5))
+check("1b 座位 5（2026-11-02 起改成 GEMINI38 + low）主档发的是 openai 的 low",
+      _mine5 == {"reasoning_effort": "low"}, str(_mine5))
 check("1c 座位 5 → 替补 DEEPSEEK 发的与存档里那一手逐字节相同（= ark 的 low）",
       probe(CFG, 5, "DEEPSEEK") == SAVE_DS_LOW, str(probe(CFG, 5, "DEEPSEEK")))
 #: ⚠️ 1d / 1e 是本节的**判别闸门**：只要哪天改成"把原档案风格算出来的 dict 带过去"（= A），
@@ -186,9 +186,9 @@ check("2c 绝对锚点②：座位 2（合成配置 `off`）→ DEEPSEEK 仍是 
 check("2d 只影响点名的那一家：{GLM: off} 之下换到 DEEPSEEK 的参数与不配时逐字节相同",
       probe(with_fb({"GLM": "off"}, CFG_S2_OFF), 2, "DEEPSEEK") == _base,
       f"{probe(with_fb({'GLM': 'off'}, CFG_S2_OFF), 2, 'DEEPSEEK')} vs {_base}")
-check("2e 主档（resolve）根本不读它：{MIMO: off, DEEPSEEK: off} 之下座位 5 主档仍是 mimo 的 low",
-      probe_primary(with_fb({"MIMO": "off", "DEEPSEEK": "off"}), 5) == SAVE_DS_LOW,
-      str(probe_primary(with_fb({"MIMO": "off", "DEEPSEEK": "off"}), 5)))
+check("2e 主档（resolve）根本不读它：{GEMINI38: off, DEEPSEEK: off} 之下座位 5 主档仍是 openai 的 low",
+      probe_primary(with_fb({"GEMINI38": "off", "DEEPSEEK": "off"}), 5) == {"reasoning_effort": "low"},
+      str(probe_primary(with_fb({"GEMINI38": "off", "DEEPSEEK": "off"}), 5)))
 _src = io.open(os.path.join(ROOT, "wolf", "routing.py"), encoding="utf-8").read()
 _between = lambda a, b: _src[_src.index(a):_src.index(b)]        # noqa: E731
 check("2f 源码级：resolve() 的函数体里一个字都没提 fallback_thinking，它只出现在 resolve_profile()",

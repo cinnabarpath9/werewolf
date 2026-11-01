@@ -49,19 +49,19 @@ def main() -> int:
 
     print("=== 一、没配参数 = 完全按 config ===")
     plain = routing.resolve(cfg, seat1)
-    check("1a 座位 1 用的还是 config 里的值（温度 0.7 / 32000）",
-          plain.temperature == 0.7 and plain.max_tokens == 32000, str(plain))
+    check("1a 座位 1 用的还是 config 里的值（2026-11-02：统一温度 1.0 / 20000）",
+          plain.temperature == 1.0 and plain.max_tokens == 20000, str(plain))
     check("1b 超时 450、重试 4、卡住 25 也没被顺手改掉",
           plain.timeout == 450 and plain.max_retries == 4 and plain.idle_timeout == 25.0,
           f"{plain.timeout}/{plain.max_retries}/{plain.idle_timeout}")
 
     print("\n=== 二、页面上给这条 API 配了参数 = 覆盖 config ===")
     os.environ["WOLF_API_TUNING"] = json.dumps({
-        "ARK": {"temperature": 1.37, "max_tokens": 9000, "timeout": 120,
+        "MINIMAX": {"temperature": 1.37, "max_tokens": 9000, "timeout": 120,
                 "max_retries": 1, "idle_timeout": 12, "thinking": "off"},
     })
     tuned = routing.resolve(cfg, seat1)
-    check("2a 温度被页面值覆盖（1.37，不是 config 的 0.7）", tuned.temperature == 1.37, str(tuned.temperature))
+    check("2a 温度被页面值覆盖（1.37，不是 config 的 1.0）", tuned.temperature == 1.37, str(tuned.temperature))
     check("2b max_tokens / 超时 / 重试 / 卡住 全部按页面值",
           (tuned.max_tokens, tuned.timeout, tuned.max_retries, tuned.idle_timeout)
           == (9000, 120, 1, 12.0), f"{tuned.max_tokens}/{tuned.timeout}/{tuned.max_retries}/{tuned.idle_timeout}")
@@ -83,13 +83,13 @@ def main() -> int:
     os.environ["WOLF_API_TUNING"] = "{这不是 JSON"
     broken = routing.resolve(cfg, seat1)
     check("4a 坏 JSON → 当没配，回落 config（不抛异常）",
-          broken.temperature == 0.7 and broken.max_tokens == 32000, str(broken))
-    os.environ["WOLF_API_TUNING"] = json.dumps({"ARK": {"temperature": "很热"}})
+          broken.temperature == 1.0 and broken.max_tokens == 20000, str(broken))
+    os.environ["WOLF_API_TUNING"] = json.dumps({"MINIMAX": {"temperature": "很热"}})
     weird = routing.resolve(cfg, seat1)
     check("4b 值类型写错 → 这一项不生效，其它照常",
-          weird.temperature == 0.7, str(weird.temperature))
+          weird.temperature == 1.0, str(weird.temperature))
     os.environ["WOLF_API_TUNING"] = json.dumps([1, 2, 3])
-    check("4c 不是对象 → 当没配", routing.resolve(cfg, seat1).temperature == 0.7)
+    check("4c 不是对象 → 当没配", routing.resolve(cfg, seat1).temperature == 1.0)
 
     os.environ.pop("WOLF_API_TUNING", None)
     bad = [x for x in RESULTS if not x[1]]

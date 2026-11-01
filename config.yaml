@@ -148,8 +148,8 @@ llm:
     #      低档 65% ⇒ 能降中档、不能关）。
     #   （历史：这两行原来是千问 —— 千问要手写 enable_thinking，给它发 reasoning_effort=high
     #     会偶发 503；千问 2026-10-11 深夜**下桌**，只留在 game.fallback 里当替补。）
-    1:  { profile: ARK, model: Doubao-Seed-2.1-lite, thinking: low, temperature: 0.7, max_tokens: 32000, timeout: 450 }
-    7:  { profile: ARK, model: Doubao-Seed-2.1-lite, thinking: low, temperature: 1.1, max_tokens: 32000, timeout: 450 }
+    1:  { profile: MINIMAX, temperature: 1.0, max_tokens: 20000, timeout: 450, thinking: {speech: high, decision: high, aux: low} }
+    7:  { profile: MINIMAX, temperature: 1.0, max_tokens: 20000, timeout: 450, thinking: {speech: high, decision: high, aux: low} }
     # deepseek（2 号 沈倩宁 掀桌 / 8 号 赵泠汐 讲理阴阳）
     #   ⚠️ max_tokens 必须 ≥16000：思考链算进 completion_tokens，给小了正文会被截空
     #   ⚠️ `thinking: "off"` = **有意关思考**（2026-10-11 深夜作者定）：固定卷三档实测
@@ -158,7 +158,7 @@ llm:
     # 2026-10-15 作者指示「模型改适合档位」：本座位由 off（关）改 low（中）。依据：34 道终版卷中 76% > 高 74% > 关 62%（旧 26 道卷上关 88% 最优 ⇒ 两卷冲突）；且真局里 DS 那次「同一份判断自相矛盾」（座位 8）正发生在关档下。⚠️ 代价：单次 1.5~2s → 约 30s；回退就把 thinking 改回 off（带引号）。
     2: { profile: QIANFAN_DS, temperature: 1.0, max_tokens: 20000, timeout: 450, thinking: {speech: high, decision: high, aux: low} }
     # 2026-10-15 作者指示「模型改适合档位」：本座位由 off（关）改 low（中）。依据：34 道终版卷中 76% > 高 74% > 关 62%（旧 26 道卷上关 88% 最优 ⇒ 两卷冲突）；且真局里 DS 那次「同一份判断自相矛盾」（座位 8）正发生在关档下。⚠️ 代价：单次 1.5~2s → 约 30s；回退就把 thinking 改回 off（带引号）。
-    8: { profile: QIANFAN_DS, temperature: 0.9, max_tokens: 20000, timeout: 450, thinking: {speech: high, decision: high, aux: low} }
+    8: { profile: QIANFAN_DS, temperature: 1.0, max_tokens: 20000, timeout: 450, thinking: {speech: high, decision: high, aux: low} }
     # glm-5.3-flash —— 2026-10-09 用户要求：**改走火山端点**（模型不变，只换服务方）。
     #   做法：`profile: ARK` 拿火山的 base_url 与 key，再显式把 `model` 压成 glm-5.3-flash
     #   （路由里显式 model 优先级最高；这样**不需要额外的 key**，用现成那把 ARK key）。
@@ -166,8 +166,8 @@ llm:
     # ⚠️ 3/9 是货真价实的 GLM 模型，但**走火山方舟的端点**（2026-10-10 作者确认：豆包/dsv4.1/glm5.3f
     #    都走火山、密钥共用）。火山上 glm **不接受 thinking.type=disabled**（400）—— 能开不能关，
     #    所以这两个座位**别配 off 档**（glm 风格的 off 已改成什么都不发兜底）。
-    3:  { profile: QIANFAN_GLM, temperature: 1.2, max_tokens: 16000, timeout: 450, thinking: low }
-    9:  { profile: QIANFAN_GLM, temperature: 1.05, max_tokens: 16000, timeout: 450, thinking: low }
+    3:  { profile: QIANFAN_GLM, temperature: 1.0, max_tokens: 16000, timeout: 450, thinking: low }
+    9:  { profile: QIANFAN_GLM, temperature: 1.0, max_tokens: 16000, timeout: 450, thinking: low }
     # claude-haiku-5-5 @ 快米兔（4 号 赵令仪 城府 / 10 号 沈栖迟 装大人）
     #   ⚠️ 2026-10-11 换人：豆包（Doubao-Seed-2.1-lite）**下桌** —— 它不抖，但真的慢
     #   （同一份卷子单组 100~190 秒、平均 49 秒/次，还会把排在它后面的模型一起堵住：引擎串行等）。
@@ -182,8 +182,8 @@ llm:
     #      max_tokens 16000 时大包会**交白卷**（思考吃满、正文空白）；抬到 32000 能答，但偶尔要 500 秒+。
     #      要更快就在这两行把 low 换成 `thinking: "off"`（小米只有开/关，没有预算旋钮；掉约 12 分）。
     #      它思考时**一直吐字节**，所以 idle 看门狗抓不到它的长尾（实测最长空档只有 3.2 秒）。
-    5:  { profile: MIMO, temperature: 0.8, max_tokens: 32000, timeout: 450, thinking: low }
-    11: { profile: MIMO, temperature: 1.25, max_tokens: 32000, timeout: 450, thinking: low }
+    5:  { profile: GEMINI38, temperature: 1.0, max_tokens: 20000, timeout: 450, thinking: low }
+    11: { profile: GEMINI38, temperature: 1.0, max_tokens: 20000, timeout: 450, thinking: low }
     # 6 号是真人玩家（不配模型）
     #
     # 如果 1.3 以上那几档开始"说胡话 / 格式出错"，把最高那两档降到 1.15 就行。

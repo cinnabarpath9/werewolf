@@ -64,8 +64,8 @@ print("=== 一、思考参数：逐座位（发言第1天 / 决策）===")
 #:      要改任何一座的档位，请连 `docs/待完善清单.md` 的 E56 与本文件一起改。
 #: ⚠️ 2026-11-02：作者把 ds / glm 迁到**千帆 token plan**，档位按 v2 分档题实测重定：
 #:   DS high（75% vs low 62%）、GLM low（75% vs high 62%，且每题 3.5s）、Haiku 默认（off，75%/8s）。
-EXPECT = {1: "low", 2: "high", 3: "low", 4: "off", 5: "low", 6: "high",
-          7: "low", 8: "high", 9: "low", 10: "off", 11: "low"}
+EXPECT = {1: "high", 2: "high", 3: "low", 4: "off", 5: "low", 6: "high",
+          7: "high", 8: "high", 9: "low", 10: "off", 11: "low"}
 
 #: ⚠️ 2026-10-11 深夜的一课（已登记在 `docs/待完善清单.md` E56）：**关思考很容易"假关"**。
 #:   两个坑都实测踩到过，而且**预检都不报**（`t_routing_config` 当时 11/11 全绿）：
