@@ -17,7 +17,7 @@
 
 llm:
   default:
-    profile: GLM            # 兜底平台（没单独配的座位用它；现在真走它的只有 3/9 与座位 6）
+    profile: QIANFAN_GLM    # 兜底平台（2026-11-02：ds/glm 迁千帆；52pay 那把 GLM key 已失效）
                             # 可选档案（都在 .env 里，一把 key 一组）：
                             #   QWEN / GLM / DEEPSEEK  → api.52pay.com（统一中转）
                             #   HAIKU                 → api.52pay.com，claude-haiku-5-5（4/10 号用）
@@ -156,9 +156,9 @@ llm:
     #      关思考 88% / 2,926 tok / 3s ＞ 中档 81% ＞ 高档 77%。
     #      **引号不能省**：裸 off 会被 YAML 当布尔 false、被静默丢掉后回落满档（见 E56）。
     # 2026-10-15 作者指示「模型改适合档位」：本座位由 off（关）改 low（中）。依据：34 道终版卷中 76% > 高 74% > 关 62%（旧 26 道卷上关 88% 最优 ⇒ 两卷冲突）；且真局里 DS 那次「同一份判断自相矛盾」（座位 8）正发生在关档下。⚠️ 代价：单次 1.5~2s → 约 30s；回退就把 thinking 改回 off（带引号）。
-    2: { profile: DEEPSEEK, temperature: 1.0, max_tokens: 20000, timeout: 450, thinking: low }
+    2: { profile: QIANFAN_DS, temperature: 1.0, max_tokens: 20000, timeout: 450, thinking: {speech: high, decision: high, aux: low} }
     # 2026-10-15 作者指示「模型改适合档位」：本座位由 off（关）改 low（中）。依据：34 道终版卷中 76% > 高 74% > 关 62%（旧 26 道卷上关 88% 最优 ⇒ 两卷冲突）；且真局里 DS 那次「同一份判断自相矛盾」（座位 8）正发生在关档下。⚠️ 代价：单次 1.5~2s → 约 30s；回退就把 thinking 改回 off（带引号）。
-    8: { profile: DEEPSEEK, temperature: 0.9, max_tokens: 20000, timeout: 450, thinking: low }
+    8: { profile: QIANFAN_DS, temperature: 0.9, max_tokens: 20000, timeout: 450, thinking: {speech: high, decision: high, aux: low} }
     # glm-5.3-flash —— 2026-10-09 用户要求：**改走火山端点**（模型不变，只换服务方）。
     #   做法：`profile: ARK` 拿火山的 base_url 与 key，再显式把 `model` 压成 glm-5.3-flash
     #   （路由里显式 model 优先级最高；这样**不需要额外的 key**，用现成那把 ARK key）。
@@ -166,15 +166,15 @@ llm:
     # ⚠️ 3/9 是货真价实的 GLM 模型，但**走火山方舟的端点**（2026-10-10 作者确认：豆包/dsv4.1/glm5.3f
     #    都走火山、密钥共用）。火山上 glm **不接受 thinking.type=disabled**（400）—— 能开不能关，
     #    所以这两个座位**别配 off 档**（glm 风格的 off 已改成什么都不发兜底）。
-    3:  { profile: ARK, model: glm-5.3-flash, temperature: 1.2, max_tokens: 16000, timeout: 450 }
-    9:  { profile: ARK, model: glm-5.3-flash, temperature: 1.05, max_tokens: 16000, timeout: 450 }
+    3:  { profile: QIANFAN_GLM, temperature: 1.2, max_tokens: 16000, timeout: 450, thinking: low }
+    9:  { profile: QIANFAN_GLM, temperature: 1.05, max_tokens: 16000, timeout: 450, thinking: low }
     # claude-haiku-5-5 @ 快米兔（4 号 赵令仪 城府 / 10 号 沈栖迟 装大人）
     #   ⚠️ 2026-10-11 换人：豆包（Doubao-Seed-2.1-lite）**下桌** —— 它不抖，但真的慢
     #   （同一份卷子单组 100~190 秒、平均 49 秒/次，还会把排在它后面的模型一起堵住：引擎串行等）。
     #   Haiku 5.5 实测又快又准：新卷子 83%（与 GLM 并列第一）、平均 15 秒/次、三个快模型里 token 最便宜。
     #   ⚠️ 它的思考链**不回传**，但 reasoning_effort=high 实测有效（完成 token 881→1653）。
-    4:  { profile: HAIKU, temperature: 0.8, max_tokens: 20000, timeout: 450, thinking: low }
-    10: { profile: HAIKU, temperature: 1.15, max_tokens: 20000, timeout: 450, thinking: low }
+    4:  { profile: HAIKU, temperature: null, max_tokens: 20000, timeout: 450, thinking: "off" }
+    10: { profile: HAIKU, temperature: null, max_tokens: 20000, timeout: 450, thinking: "off" }
     # mimo（5 号 白清弦 寡言定场 / 11 号 安迟迟 高攻纸防）
     #   ⚠️ 2026-10-11 深夜作者定：5/11 走**中档**（`thinking: low`）—— 26 题实测中档 81%、
     #      决策题 100%；高档 85% 但要多 5.5 倍时间（154s），而且大包有交白卷风险。

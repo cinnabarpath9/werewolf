@@ -62,8 +62,10 @@ print("=== 一、思考参数：逐座位（发言第1天 / 决策）===")
 #:   ⚠️ 这与 2026-10-06 的旧口径（「五个模型都不关思考、全程满档」）**正好相反** ——
 #:      那是**已被作者推翻**的旧口径，别再照它把某个座位改回 high。
 #:      要改任何一座的档位，请连 `docs/待完善清单.md` 的 E56 与本文件一起改。
-EXPECT = {1: "low", 2: "low", 3: "high", 4: "low", 5: "low", 6: "high",
-          7: "low", 8: "low", 9: "high", 10: "low", 11: "low"}
+#: ⚠️ 2026-11-02：作者把 ds / glm 迁到**千帆 token plan**，档位按 v2 分档题实测重定：
+#:   DS high（75% vs low 62%）、GLM low（75% vs high 62%，且每题 3.5s）、Haiku 默认（off，75%/8s）。
+EXPECT = {1: "low", 2: "high", 3: "low", 4: "off", 5: "low", 6: "high",
+          7: "low", 8: "high", 9: "low", 10: "off", 11: "low"}
 
 #: ⚠️ 2026-10-11 深夜的一课（已登记在 `docs/待完善清单.md` E56）：**关思考很容易"假关"**。
 #:   两个坑都实测踩到过，而且**预检都不报**（`t_routing_config` 当时 11/11 全绿）：
@@ -171,37 +173,26 @@ for _sid, _p in sorted(probes.items()):
           and _p["de"].get("reasoning_effort") == "low",
           f"发言 {_p['sp']} → 决策 {_p['de']}")
 
-#: 1f DEEPSEEK（2/8）：风格是 **ark**（走火山方舟、认 thinking.type），不是 openai 的裸
-#:    `reasoning_effort` —— config.yaml:77 写着 `DEEPSEEK: ark`，别哪天被「想当然」改回去。
-#:    ⚠️ 它的档位是 **`off`**（有意关思考）⇒ 真发出去的是 `{thinking: {type: disabled}}`：见 1m。
+#: 1f 千帆 DS（2/8）：风格是 **openai**（千帆兼容层认裸 reasoning_effort），不是火山的 thinking.type。
+#:   2026-11-02 换渠道：作者把 DS 从火山迁到千帆 token plan；档位 high（v2 实测 75% vs low 62%）。
 for _sid, _p in sorted(probes.items()):
-    if _p["prof"] != "DEEPSEEK":
+    if _p["prof"] != "QIANFAN_DS":
         continue
-    check(f"1f {_sid}号（DEEPSEEK / {_p['model']}）按 ark 风格发 thinking.type"
-          f"（不是裸 reasoning_effort；它是 off 档 ⇒ 真发的是 thinking.type=disabled）",
-          _tier_of(_p["sp"], _p["style"]) in ("off", "low", "high")
-          and "thinking" in _p["sp"]
-          and "enable_thinking" not in _p["sp"] and "thinking_budget" not in _p["sp"],
+    check(f"1f {_sid}号（千帆 DS / {_p['model']}）按 openai 风格发 reasoning_effort=high",
+          _p["sp"].get("reasoning_effort") == "high" and "thinking" not in _p["sp"]
+          and "enable_thinking" not in _p["sp"],
           f"风格={_p['style']}；发言={_p['sp']}")
 
-#: 1g **单独钉住**座位 3/9（`profile: ARK` + `model: glm-5.3-flash` —— 真的是火山端点上的 glm）：
-#:   不许 disabled、不许空档、必须显式满档。
-#:   依据：火山上 glm 关不掉思考（发 `thinking.type: disabled` 会 400 InvalidParameter），
-#:   而「什么都不发」= 落到平台默认 ⇒ 实测 62% / 201,294 tok / 192s（全场最差也最贵）。
-#:   ⚠️ 判据要带 `prof == "ARK"`：6 号走 `llm.default` 的 GLM 档案（那个**不是**火山端点，
-#:      风格是 glm、off 档是「什么都不发」），别把 6 号也算进这条。
+#: 1g **单独钉住**座位 3/9（`profile: QIANFAN_GLM` + `glm-5.3-flash`）：
+#:   2026-11-02 迁千帆后按实测给 **low**（v2：low 75% / high 62%，且 low 每题 3.5 秒）。
 _glm_seats = sorted(sid for sid, p in probes.items()
-                    if "glm" in str(p["model"]).lower() and p["prof"] == "ARK")
-check("1g 3/9 就是那两张走火山端点的 glm 牌（座位表没漂，config.yaml:125-126）",
-      _glm_seats == [3, 9], str(_glm_seats))
+                    if "glm" in str(p["model"]).lower() and p["prof"] == "QIANFAN_GLM" and sid != 6)
+check("1g 3/9 就是那两张千帆 glm 牌（座位表没漂）", _glm_seats == [3, 9], str(_glm_seats))
 for _sid in _glm_seats:
     _p = probes[_sid]
-    check(f"1g {_sid}号（火山 glm-5.3-flash）**不许出现 disabled、也不许空档**，"
-          f"必须显式满档 high（作者 2026-10-11 深夜：火山上 glm 只能开不能关）",
-          bool(_p["sp"]) and bool(_p["de"])
-          and (_p["sp"].get("thinking") or {}).get("type") == "enabled"
-          and (_p["de"].get("thinking") or {}).get("type") == "enabled"
-          and "disabled" not in str(_p["sp"]) and "disabled" not in str(_p["de"]),
+    check(f"1g {_sid}号（千帆 glm-5.3-flash）发 reasoning_effort=low（作者 2026-11-02 实测：low 最优）",
+          _p["sp"].get("reasoning_effort") == "low" and _p["de"].get("reasoning_effort") == "low"
+          and "disabled" not in str(_p["sp"]),
           f"发言={_p['sp']} 决策={_p['de']}")
 
 #: 1h 总闸：**每个座位的发言档与决策档必须一致**（配置里是按座位写一个档位，所以这两组同档；
@@ -260,12 +251,11 @@ check("1j 非座位的活（reflect / 自检）**每个座位**都不是满档"
 #:    所以 1i / 2f 那两条闸门必须认「low 也是在思考」，否则会把这条正常路径判红。
 _haiku_seats = sorted(sid for sid, p in probes.items() if p["prof"] == "HAIKU")
 _haiku_detail = {sid: probes[sid]["sp"] for sid in _haiku_seats}
-check("1k HAIKU 按 openai 风格发 reasoning_effort（表里没它、兜底 openai 是有意的）；"
-      "4/10 号座位层 thinking: low ⇒ 发 reasoning_effort: low",
+check("1k HAIKU 按 openai 风格发 reasoning_effort（2026-11-02 起座位层 thinking: off ⇒ 发 reasoning_effort: none）",
       routing.thinking_style_for(cfg, "HAIKU") == "openai"
       and _haiku_seats == [4, 10]
-      and all(probes[sid]["sp"].get("reasoning_effort") == "low"
-              and probes[sid]["de"].get("reasoning_effort") == "low"
+      and all(probes[sid]["sp"].get("reasoning_effort") == "none"
+              and probes[sid]["de"].get("reasoning_effort") == "none"
               and "thinking" not in probes[sid]["sp"]
               and "enable_thinking" not in probes[sid]["sp"] for sid in _haiku_seats),
       f"风格={routing.thinking_style_for(cfg, 'HAIKU')} 发言={_haiku_detail}")
@@ -287,13 +277,13 @@ check("1l 座位层不再手写思考参数（extra_body 里不许出现；要�
 #:   其实满血在想。现在 config 已改成 `off`（t_routing_config.py 3a 也随之恢复零问题）。
 #:   以后谁把 `off` 写成别的（或让 level_name 不认 `off`），这条立刻红。
 _ds_off = {"thinking": {"type": "disabled"}}
-_ds_seats = sorted(sid for sid, p in probes.items() if p["prof"] == "DEEPSEEK")
+_ds_seats = sorted(sid for sid, p in probes.items() if p["prof"] == "QIANFAN_DS")
 _ds_now = {sid: probes[sid]["de"] for sid in _ds_seats}
 #: 1m 座位 2/8（DEEPSEEK）的**发言与决策参数**必须正好等于「本座位档位 × 该档案风格」该发的那组。
 #:   ⚠️ 2026-10-15：作者把 2/8 由 off（关）改成 low（中）——依据：34 道终版卷 中 76% > 高 74% > 关 62%
 #:   （旧 26 道卷上关 88% 最优 ⇒ 两卷冲突），且真局里 DS 那次「同一份判断自相矛盾」（座位 8）正发生在关档下。
 #:   本条**不再钉死某一档**，而是钉「真发出去的参数必须与 EXPECT 一致」⇒ 以后改档位只需改 EXPECT 一处。
-check("1m 座位 2/8（DEEPSEEK）的发言与决策参数都等于「EXPECT 档位 × 档案风格」该发的那组",
+check("1m 座位 2/8（千帆 DS）的发言与决策参数都等于「EXPECT 档位 × 档案风格」该发的那组",
       _ds_seats == [2, 8]
       and all(probes[sid]["de"] == dict(levels_for(probes[sid]["style"])[EXPECT[sid]]) and probes[sid]["sp"] == dict(levels_for(probes[sid]["style"])[EXPECT[sid]]) for sid in _ds_seats),
       "座位=%s 决策=%s" % (_ds_seats, {sid: probes[sid]["de"] for sid in _ds_seats}))

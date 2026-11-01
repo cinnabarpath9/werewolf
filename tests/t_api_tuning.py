@@ -70,10 +70,14 @@ def main() -> int:
 
     print("\n=== 三、只有这条 API 受影响 ===")
     other = routing.resolve(cfg, seat2)
-    check("3a 座位 2 用的是另一家（DEEPSEEK），温度仍是 config 的 1.0",
+    check("3a 座位 2 用的是另一家（千帆 DS），温度仍是 config 的 1.0",
           other.temperature == 1.0 and other.max_tokens == 20000, str(other))
-    check("3b 座位 2 的思考档没被带成 off（仍是 config 的 low）",
-          all(v == "low" for group in other.thinking.values() for v in group.values()), str(other.thinking))
+    # 2026-11-02：座位 2 迁千帆 DS，档位按 v2 实测改成 high（见模型参考 §0.5）
+    # 2026-11-02：2/8 迁千帆 DS 后是 speech/decision=high、aux=low（非座位活故意低一档）
+    check("3b 座位 2 的思考档没被带成 off（发言/决策 high、aux low）",
+          other.thinking.get("speech", {}).get(1) == "high"
+          and other.thinking.get("decision", {}).get(1) == "high"
+          and other.thinking.get("aux", {}).get(1) == "low", str(other.thinking))
 
     print("\n=== 四、坏数据不能让整局起不来 ===")
     os.environ["WOLF_API_TUNING"] = "{这不是 JSON"

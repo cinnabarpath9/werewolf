@@ -265,6 +265,10 @@ def resolve(cfg: dict, seat) -> SeatLLM:
     role_block = _lookup(llm.get("roles"), seat.role_key)
     seat_block = _lookup(llm.get("seats"), seat.id)
     block = _merge(_expand(llm.get("default")), _expand(role_block))
+    # ⚠️ `_merge` 会跳过 None（防"空值覆盖默认"），但 `temperature: null` 是**有意**的：
+    # 表示"这个通道不接受温度，别发这个字段"（52pay 的 claude-haiku-5-5 实测 400）。
+    # 所以座位层显式写 null 时记一个标记，合并后按 None 处理。
+    null_temperature = isinstance(seat_block, dict) and "temperature" in seat_block         and seat_block.get("temperature") is None
     block = _merge(block, _expand(seat_block))
 
     overlay = seat_profile_overlay(seat.id)
@@ -313,7 +317,8 @@ def resolve(cfg: dict, seat) -> SeatLLM:
         base_url=base_url,
         api_key=_api_key(block),
         model=str(block.get("model") or ""),
-        temperature=_f(block, "temperature", 1.0),
+        temperature=(None if (null_temperature or block.get("temperature", 1.0) is None)
+                 else _f(block, "temperature", 1.0)),
         max_tokens=_i(block, "max_tokens", 4000),
         timeout=_f(block, "timeout", 200.0),
     # 流式 + 静默超时（2026-10-10 晚）：属于"这一座怎么打"，换家时保留

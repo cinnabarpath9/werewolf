@@ -799,9 +799,12 @@ class LLMClient:
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": packet},
             ],
-            "temperature": self.temperature,
             "max_tokens": self.max_tokens,
         }
+        # ⚠️ 有的通道（52pay 的 claude-haiku-5-5 实测）**不接受自定义 temperature**：
+        # 配置里把温度写成 `temperature: null` 就整个字段不发。
+        if self.temperature is not None:
+            payload["temperature"] = self.temperature
         payload.update(self.extra_body)
         if extra:
             payload.update(extra)

@@ -96,9 +96,15 @@ def main() -> int:
     game = Game(board=make_board("eleven_standard"), agent_factory=None, seed=1, max_days=1)
     seat = game.seats[2]
     spec2 = routing.resolve(cfg, seat)
-    check("4a 座位 spec 的 thinking 与配置一致",
-          spec2.thinking.get("speech") == prod.get("speech"),
-          f"{spec2.thinking.get('speech')} vs {prod.get('speech')}")
+    # ⚠️ 2026-11-02：座位 3 现在有自己的档位（迁千帆 GLM 后按实测给 low），
+    #    所以判据改成「座位 spec == 座位层写的那一档」，而不是 == 全局 llm.thinking。
+    _seat3 = ((cfg.get("llm") or {}).get("seats") or {}).get(3) or {}
+    _want3 = _seat3.get("thinking")
+    if isinstance(_want3, dict):
+        _want3 = _want3.get("speech")
+    check("4a 座位 spec 的 thinking 与座位层配置一致（座位覆盖全局）",
+          bool(_want3) and spec2.thinking.get("speech") == {1: _want3},
+          f"spec={spec2.thinking.get('speech')} 座位层={_want3} 全局={prod.get('speech')}")
 
     bad = [x for x in RESULTS if not x[1]]
     print("\n" + "=" * 74)
