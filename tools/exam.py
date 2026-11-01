@@ -65,7 +65,7 @@ HOUSE_RULE_QIDS: tuple[str, ...] = ()
 RETIRED_QIDS = ("A1", "A2", "XA1", "XA2")
 
 #: 题库档位（`--bank`）：auto = 有 exam_hard.py 就用 hard+base，否则 base。
-BANK_CHOICES = ("auto", "base", "hard", "both")
+BANK_CHOICES = ("auto", "base", "hard", "both", "v2")
 
 #: 难度标定区间（`docs/考题设计.md` §2）：
 #:   通过率 ≥ 90% ⇒ saturated（**只作体检**：全对说明这题没有区分度；谁做错了说明这个模型可能坏了）
@@ -77,7 +77,7 @@ CAL_TOO_HARD = 0.20
 CAL_MIN_MODELS = 3
 CAL_LABELS = ("saturated", "discriminating", "too_hard")
 #: 标定结论的中文说法（打印/报告共用，免得两处不一致）
-CAL_TEXT = {"saturated": "saturated（体检题）",
+CAL_TEXT = {"saturated": "基础题（5 家全对：只体检、不计排名）",
             "discriminating": "discriminating（分档题）",
             "too_hard": "too_hard（过难，待人工复核）"}
 
@@ -983,6 +983,29 @@ def load_hard3_bank(game: dict | None = None) -> tuple[list[Q] | None, list[str]
 _UNSET = object()
 
 
+def load_v2_bank(game: dict | None = None) -> tuple[list[Q] | None, list[str], str]:
+    """v2 分档题库（`tools/exam_bank_v2.py`，2026-11-01 加）。
+
+    定位：老题库 134 道里 121 道 5 家全对（已退役），有区分度的只剩 10 道；
+    v2 专挑「多步组合 / 反直觉边界 / 注入抵抗 / 信息隔离」，用来把模型拉开档次。
+    """
+    try:
+        from exam_bank_v2 import build_v2_bank, notes as v2_notes, self_check  # noqa: PLC0415
+    except Exception as exc:                                            # noqa: BLE001
+        return None, [], f"tools/exam_bank_v2.py 不可用（{type(exc).__name__}: {exc}）"
+    problems: list[str] = list(self_check())
+    try:
+        qs = build_v2_bank(game)
+    except Exception as exc:                                            # noqa: BLE001
+        return None, problems, f"exam_bank_v2.build_v2_bank() 调用失败：{type(exc).__name__}: {exc}"
+    if not qs:
+        return None, problems, "exam_bank_v2 返回了空题库"
+    bad = [q for q in qs if not isinstance(q, Q)]
+    if bad:
+        return None, problems, f"exam_bank_v2 返回的对象不是 Q（{len(bad)} 个）"
+    return qs, problems, "；".join(v2_notes())
+
+
 def pick_banks(kind: str, base: list[Q], base_problems: list[str],
                hard: list[Q] | None, hard_problems: list[str],
                hard_note: str, hard2=_UNSET,
@@ -1599,7 +1622,7 @@ async def main() -> int:
     parser.add_argument("--bank", choices=BANK_CHOICES, default="auto",
                         help="题库档位：auto=有哪一批难题就带上哪一批（默认）；base=只要基础题库；"
                              "hard=第一批高难度 + 第二批难题 + 第三批 J2 题；"
-                             "both=基础 + 第一批 + 第二批 + 第三批 J2 题")
+                             "both=基础 + 第一批 + 第二批 + 第三批 J2 题；v2=只跑 v2 分档题库")
     parser.add_argument("--dry-run", action="store_true",
                         help="离线演练：用 3 个假模型跑完整流程（含标定 + 报告落盘），"
                              "不发任何真请求、不花作者的钱")
@@ -1635,10 +1658,21 @@ async def main() -> int:
         # ⚠️ 它们的 context 是空的（通用规则写在题面里）⇒ `pick_banks` 必须把它们并进
         #    闭卷集合，否则会被「上下文取不到就丢题」整批吞掉（见 pick_banks 里的注释）。
         hard3_bank, hard3_problems, hard3_note = load_hard3_bank(game)
+    v2_bank, v2_problems, v2_note = (None, [], "")
+    if args.bank in ("auto", "both", "v2"):
+        v2_bank, v2_problems, v2_note = load_v2_bank(game)
+    # `--bank v2` 是「只跑 v2」：pick_banks 按 base 组一份空壳，下面把内容换掉
+    pick_kind = "base" if args.bank == "v2" else args.bank
     bank, problems, closed_qids, bank_note = pick_banks(
-        args.bank, base_bank, base_problems, hard_bank, hard_problems, hard_note,
+        pick_kind, base_bank, base_problems, hard_bank, hard_problems, hard_note,
         hard2_bank, hard2_problems, hard2_note,
         hard3_bank, hard3_problems, hard3_note)
+    if args.bank == "v2":
+        bank = []
+    if v2_bank:
+        bank = bank + v2_bank
+        problems = list(problems) + list(v2_problems)
+        print(f"v2 分档题库：{len(v2_bank)} 道" + (f"（{v2_note}）" if v2_note else ""))
     if bank is None:
         print(problems[0] if problems else f"❌ 题库组装失败（--bank {args.bank}）")
         if hard_note and hard_note not in (bank_note or ""):
