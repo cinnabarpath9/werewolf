@@ -238,6 +238,7 @@ L2_LOCAL_SERIAL = (
     "t_reveal_death.py",              # 新板子：屠城（杀光所有好人才赢）+ 出局亮身份（明牌板）~1s
     "t_roles_v2.py",                  # 守墓人/养鸦人/幸运儿（民牌）+ 愚者改名 + 双层奶穿 ~2s
     "t_review_fixes.py",              # 2026-11-03 审查修复：隔离/清洗/发布规则/题库判分 ~0.5s
+    "t_butler_prompt.py",               # 托管：发言补强 + 思考档下发（纯函数）~0.2s
     "t_wolf_double_explode.py",       # 11 人板新规：狼王禁爆 / 单爆挂起 / 双爆吞警徽 ~0.6s
 )
 

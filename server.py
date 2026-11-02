@@ -1110,11 +1110,12 @@ class Room:
                 spec.max_tokens = int(cfg_b["max_tokens"])
             except (TypeError, ValueError):
                 pass
+        # 2026-11-03：托管以前固定 plain 风格 → 配置的思考档根本没发出去（模型话少/想得浅）。
+        # 现在按渠道推断它能认哪套参数，再把档位真的发下去；推断不出来的仍用 plain（不发）。
+        from wolf import butler as butler_mod                     # noqa: PLC0415
         level = str(cfg_b.get("thinking") or "").strip().lower()
-        if level in ("off", "low", "high"):
-            from wolf.llm import THINKING_LEVELS_BY_STYLE     # noqa: PLC0415
-            spec.thinking = {g: {1: level} for g in ("speech", "decision", "aux")}
-            spec.thinking_style = routing.thinking_style_for(self.cfg, name)
+        spec.thinking = butler_mod.thinking_table(level)
+        spec.thinking_style = (level and butler_mod.infer_thinking_style(spec.base_url)) or "plain"
         try:
             client = routing.build_client(spec, label=f"butler/{name}")
         except Exception as exc:                          # noqa: BLE001
@@ -1143,15 +1144,19 @@ class Room:
             self.send_to(ws, {"type": "notice", "text": "🤖 " + err})
             return
         self.send_to(ws, {"type": "notice", "text": "🤖 托管模型正在替你想这一手…"})
-        task = Task(kind=pending.get("kind") or "", text=pending.get("text") or "",
+        kind = pending.get("kind") or ""
+        task = Task(kind=kind, text=pending.get("text") or "",
                     schema=pending.get("schema") or "",
                     legal=list(pending.get("legal") or []),
                     extra=dict(pending.get("extra") or {}),
                     required=tuple(pending.get("required") or ()))
+        # 2026-11-03：人类面板的 packet 比 AI 座位少一截脚手架 —— 托管容易一句话交差。
+        # 这里明确补一段要求（只对发言类），存档里 24 字 vs 243 字就是这么来的。
+        from wolf import butler as butler_mod                     # noqa: PLC0415
+        packet = butler_mod.augment_packet(pending.get("packet") or "", kind)
         agent = LLMAgent(client, seat)
         try:
-            action = await asyncio.wait_for(agent.ask(pending.get("packet") or "", task),
-                                            timeout=180)
+            action = await asyncio.wait_for(agent.ask(packet, task), timeout=180)
         except Exception as exc:                          # noqa: BLE001
             self.send_to(ws, {"type": "notice",
                               "text": f"🤖 托管失败：{type(exc).__name__}: {exc}（你可以自己决策）"})
