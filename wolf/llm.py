@@ -113,6 +113,10 @@ THINKING_LEVELS_BY_STYLE: dict[str, dict[str, dict]] = {
     },
 }
 #: 兼容旧名字（有些地方还在用 THINKING_LEVELS 做校验/展示）
+#: 2026-11-02「公共体验实例」：访客自带任意 OpenAI 兼容渠道时，**不发任何思考参数** ——
+#: 我们不知道他那家认哪套字段，发错就是 400/重试到超时。三档都映射成空 dict = 什么都不带。
+THINKING_LEVELS_BY_STYLE["plain"] = {"off": {}, "low": {}, "high": {}}
+
 THINKING_LEVELS: dict[str, dict] = THINKING_LEVELS_BY_STYLE["openai"]
 
 

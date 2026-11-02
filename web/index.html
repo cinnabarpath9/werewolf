@@ -878,6 +878,16 @@
       </div>
     </div>
 
+    <div class="picker-options" id="demoProvider" hidden>
+      <div class="picker-row">
+        <span class="picker-label">云端体验：填你自己的模型</span>
+      </div>
+      <input id="demoBase" type="text" placeholder="Base URL，例如 https://api.deepseek.com/v1" autocomplete="off">
+      <input id="demoModel" type="text" placeholder="模型名，例如 deepseek-chat" autocomplete="off">
+      <input id="demoKey" type="password" placeholder="API Key（只存在你自己的浏览器里）" autocomplete="off">
+      <div class="sub" id="demoHint">公共体验实例：key 只存在你本机浏览器，服务端不落盘、用完即丢。</div>
+    </div>
+
     <div class="picker-quote">
       <p>「天黑请闭眼，狼人请睁眼。」</p>
       <span>身份只有你自己知道 · 其余交给判断</span>
@@ -1323,6 +1333,34 @@ function effectiveMock() {
   return !hasUsableApi();
 }
 
+const DEMO_STORE = 'wolf.demoProvider';
+function loadDemoProvider() {
+  try { return JSON.parse(localStorage.getItem(DEMO_STORE) || '{}') || {}; }
+  catch (e) { return {}; }
+}
+function demoProvider() {
+  const p = {
+    base_url: $('demoBase').value.trim(),
+    model: $('demoModel').value.trim(),
+    api_key: $('demoKey').value.trim(),
+  };
+  try { localStorage.setItem(DEMO_STORE, JSON.stringify(p)); } catch (e) { /* 隐私模式忽略 */ }
+  return p;
+}
+function renderDemoBox() {
+  const demo = !!(S.status && S.status.demo);
+  const box = $('demoProvider');
+  if (!box) return;
+  box.hidden = !demo;
+  if (demo && !box.dataset.filled) {
+    const p = loadDemoProvider();
+    $('demoBase').value = p.base_url || '';
+    $('demoModel').value = p.model || '';
+    $('demoKey').value = p.api_key || '';
+    box.dataset.filled = '1';
+  }
+}
+
 function renderHome() {
   const st = S.status || {};
   const running = !!st.running;
@@ -1330,10 +1368,11 @@ function renderHome() {
     ? (running ? '返回对局' : '进入房间')
     : (running ? '返回对局' : '开始游戏');
   $('btnRoom').hidden = MP.guest;
-  $('btnSettings').hidden = MP.guest;
+  $('btnSettings').hidden = MP.guest || !!(S.status && S.status.demo);
   $('btnPlay').classList.toggle('primary', true);
   $('btnSettings').classList.toggle('ghost', true);
 
+  renderDemoBox();
   const linked = !!(ws && ws.readyState === 1);
   const bad = needToken || hostRejected;
   for (const pill of [$('homeConn'), $('settingsConn')]) {
@@ -1540,7 +1579,9 @@ function confirmStart() {
   const btn = $('btnConfirmStart');
   btn.disabled = true;
   btn.textContent = '正在发牌…';
-  send({ type: 'start', mock, human_seat: S.pick.seat, board: board.name, seed: 0 });
+  const demoProv = (S.status && S.status.demo) ? demoProvider() : null;
+  send({ type: 'start', mock, human_seat: S.pick.seat, board: board.name, seed: 0,
+         ...(demoProv ? { provider: demoProv } : {}) });
   clearTimeout(startTimer);
   startTimer = setTimeout(() => {
     if (APP.launching && !(S.status && S.status.running)) {

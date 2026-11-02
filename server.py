@@ -648,6 +648,11 @@ class Room:
         #: 免得用户睡了、对局永远挂在那儿。默认 30 分钟。
         self.stall_timeout = float(self.game_cfg.get("stall_timeout", 1800))
         self.clients_llm: list[LLMClient] = []
+        #: 2026-11-02「公共体验实例」：访客自带 base_url/model/key，**只存在内存**，
+        #: 一局用完就清（不写 settings.local.json、不写 .env）。见 WOLF_DEMO。
+        self.session_provider: dict = {}
+        #: 公共体验模式：不允许改服务端设置；访客必须自带 key（或玩离线演练）。
+        self.demo_mode = str(os.environ.get("WOLF_DEMO") or "").strip() not in ("", "0", "false")
         self.mock = mock_default
         self.rng = random.Random()
         self.last_save: str | None = None
@@ -1243,6 +1248,7 @@ class Room:
             if p.get("seat"):
                 seat_rows[int(p["seat"])] = p["name"]
         base = {
+            "demo": bool(self.demo_mode),
             "type": "status",
             # ⚠️ 收尾期间对外报 running=False + cleaning=True：
             # 以前收尾时仍然报 running=True，手机底部显示"对局进行中，等别人发言…"，
@@ -1511,6 +1517,21 @@ class Room:
             return ServerHumanAgent(seat.id, self)
         if self.mock:
             return MockAgent(seat, self.rng)
+        if self.session_provider:
+            # 公共体验实例：用**访客自己填的那条**渠道（只在本局进程内用，不落盘）
+            spec = routing.SeatLLM(
+                base_url=self.session_provider.get("base_url") or "",
+                api_key=self.session_provider.get("api_key") or "",
+                model=self.session_provider.get("model") or "",
+                temperature=float(self.session_provider.get("temperature") or 1.0),
+                max_tokens=int(self.session_provider.get("max_tokens") or 20000),
+                timeout=float(getattr(self, "call_timeout", 450) or 450),
+                thinking={"speech": {1: "low"}, "decision": {1: "low"}, "aux": {1: "low"}},
+                thinking_style=str(self.session_provider.get("style") or "plain"),
+            )
+            client = routing.build_client(spec, label=f"{seat.id}号/{spec.model}")
+            self.clients_llm.append(client)
+            return LLMAgent(client, seat.id)
         spec = routing.resolve(self.cfg, seat)
         # ⚠️ 要带上"这家平台认哪种思考参数"（qwen/ark/glm/openai），否则档位表对 Qwen/豆包
         #    这类平台不生效 —— 详见 wolf/llm.py 的 THINKING_LEVELS_BY_STYLE 注释。
@@ -1985,6 +2006,7 @@ class Room:
 
         if self.game is not game:
             return                          # 已经开了新局：别再往新局推旧局的结局
+        self.session_provider = {}          # 公共体验：一局用完就清，不留在内存里
         self.broadcast({"type": "end", "winner": game.winner, "day": game.day,
                         "save": path,
                         "abandoned": abandoned or game.winner == "aborted",
@@ -2209,6 +2231,22 @@ class Room:
                 seed = int(message.get("seed") or 0)
             except (TypeError, ValueError):
                 seed = 0
+            prov = message.get("provider")
+            if self.demo_mode:
+                if isinstance(prov, dict) and prov.get("api_key") and prov.get("base_url") and prov.get("model"):
+                    self.session_provider = {
+                        "base_url": str(prov.get("base_url") or "").strip(),
+                        "model": str(prov.get("model") or "").strip(),
+                        "api_key": str(prov.get("api_key") or "").strip(),
+                        "style": str(prov.get("style") or "").strip().lower(),
+                        "temperature": prov.get("temperature"),
+                        "max_tokens": prov.get("max_tokens"),
+                    }
+                elif not message.get("mock"):
+                    self.send_to(ws, {"type": "error",
+                                      "text": "这是公共体验实例：先在首页填你自己的 base_url / 模型名 / key（只存在你自己的浏览器里），"
+                                              "或者勾「离线演练」先看流程。"})
+                    return
             info = self.viewer_info(ws)
             if info.get("role") != "host":
                 self.send_to(ws, {"type": "error", "text": "只有主机能开局"})
@@ -3784,6 +3822,10 @@ async def api_settings_butler(request: Request):
     problem = token_error(request, body)
     if problem:
         return JSONResponse({"ok": False, "error": problem}, status_code=401)
+    if ROOM is not None and getattr(ROOM, "demo_mode", False):
+        return JSONResponse({"ok": False,
+                             "error": "这是公共体验实例，不允许改服务端设置（你的 key 请填在首页，只存你自己的浏览器）。"},
+                            status_code=403)
     data = settings_store.load(HERE)
     data["butler"] = {
         "api": body.get("api") or "",
