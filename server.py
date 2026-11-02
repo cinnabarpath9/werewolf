@@ -2065,7 +2065,9 @@ class Room:
         self.broadcast({"type": "end", "winner": game.winner, "day": game.day,
                         "save": path,
                         "abandoned": abandoned or game.winner == "aborted",
-                        "experience_updated": sorted(notes)})
+                        "experience_updated": sorted(notes),
+                        # 2026-11-03：结算页要的「座位 + 全部身份 + 胜负」；对局结束才公开
+                        "settlement": settlement_payload(game)})
         # ⚠️ 这里以前会广播一条 running=True 的 status（实测报文顺序 end → running=True → running=False），
         # 中间那段手机底部又变回"对局进行中"。现在这仍旧是一条 cleaning 状态：
         # running=False、cleaning=True，前端显示"正在收尾"，直到收尾真正结束。
@@ -2741,6 +2743,42 @@ def read_viewer_error(request: Request) -> str | None:
 #: 用户给了 5 GB 额度，实测一局 12~20 MB，所以 10 局才 200 MB 左右，预算基本不会触发。
 #: ⚠️ 2026-10-12：这套窗口只算**根目录**里的存档；mock 局（演练/测试）走
 #:   `<save_dir>/_mock/` 子目录（见 `_mock_save_dir`），并在 `prune_saves` 里**先于真局被删**。
+def settlement_rows(game) -> list[dict]:
+    """结算页要用的一份"全部身份"快照（2026-11-03）。
+
+    ⚠️ **只在对局结束（end）时发给客户端** —— 中途给出去就是作弊面。
+    每行：座位 / 身份名 / 阵营 / 角色类别（wolf/god/villager）/ 是否存活 / 死因。
+    """
+    rows = []
+    for seat in getattr(game, "seats", []) or []:
+        role = ROLES.get(seat.role_key)
+        rows.append({
+            "seat": int(seat.id),
+            "role": role_name(seat.role_key),
+            "camp": camp_label(seat.camp),
+            "kind": (role.kind if role else ""),
+            "alive": bool(seat.alive),
+            "death_cause": str(getattr(seat, "death_cause", "") or ""),
+        })
+    return rows
+
+
+def settlement_payload(game) -> dict:
+    """结算页的完整载荷：身份分布 + 座位 + 胜负（不含发言/票型，那些去复盘看）。"""
+    rows = settlement_rows(game)
+    counts = {"wolf": 0, "god": 0, "villager": 0}
+    for row in rows:
+        if row["kind"] in counts:
+            counts[row["kind"]] += 1
+    return {
+        "winner": getattr(game, "winner", "") or "",
+        "day": int(getattr(game, "day", 0) or 0),
+        "board": str(getattr(getattr(game, "board_def", None), "name", "") or ""),
+        "seats": rows,
+        "counts": counts,
+    }
+
+
 def _save_policy(cfg: dict | None = None) -> tuple[int, int]:
     """留档策略。`cfg` 给了就用它（**房间自己的**配置），没给才回退到全局 ROOM。
 

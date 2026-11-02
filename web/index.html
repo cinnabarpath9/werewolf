@@ -3583,6 +3583,75 @@ function toast(text, bad) {
   setTimeout(() => el.remove(), 4200);
 }
 
+const DEATH_LABEL = { vote: '放逐', wolf: '夜里出局', poison: '被毒',
+  king: '被狼王带走', explode: '自爆', shot: '被枪带走', dream: '被梦死',
+  guard: '奶穿', explode_take: '被狼王带走' };
+
+function showSettlement(st, m) {
+  document.querySelectorAll('[data-panel="settlement"]').forEach(el => el.remove());
+  const box = document.createElement('div');
+  box.className = 'toast';
+  box.dataset.panel = 'settlement';
+  box.style.bottom = 'auto'; box.style.top = '64px';
+  box.style.maxHeight = '78vh'; box.style.overflow = 'auto';
+  box.style.width = '92vw'; box.style.maxWidth = '620px';
+
+  const label = ({ good: '好人阵营获胜', wolf: '狼人阵营获胜', draw: '平局',
+                   aborted: '本局已放弃' }[st.winner] || (st.winner || '对局结束'));
+  const good = label.includes('好人');
+  const head = document.createElement('div');
+  head.innerHTML =
+    '<div style="font-size:20px;font-weight:700;color:' + (good ? 'var(--good)' : 'var(--bad)') + '">'
+    + '🏁 ' + escapeHtml(label) + '</div>'
+    + '<div style="color:var(--dim);font-size:12.5px;margin:2px 0 10px">'
+    + '第 ' + escapeHtml(st.day) + ' 天 · ' + escapeHtml(st.seats.length) + ' 人局'
+    + (st.board ? ' · ' + escapeHtml(st.board) : '')
+    + '　·　狼 ' + (st.counts.wolf || 0) + ' / 神 ' + (st.counts.god || 0)
+    + ' / 民 ' + (st.counts.villager || 0) + '</div>';
+  box.appendChild(head);
+
+  const grid = document.createElement('div');
+  grid.style.display = 'grid';
+  grid.style.gridTemplateColumns = 'repeat(auto-fill, minmax(96px, 1fr))';
+  grid.style.gap = '8px';
+  for (const s of st.seats) {
+    const card = document.createElement('div');
+    card.className = 'settle-seat';
+    card.dataset.seat = String(s.seat);
+    const wolf = s.camp === '狼人' || s.camp === 'wolf';
+    card.style.border = '1px solid ' + (wolf ? 'rgba(212,101,95,.55)' : 'rgba(99,178,106,.5)');
+    card.style.borderRadius = '10px';
+    card.style.padding = '8px 6px';
+    card.style.textAlign = 'center';
+    card.style.opacity = s.alive ? '1' : '.62';
+    const dead = s.alive ? '' : '<div style="font-size:11px;color:var(--dim)">'
+      + escapeHtml(DEATH_LABEL[s.death_cause] || '已出局') + '</div>';
+    card.innerHTML = '<div style="font-weight:700">' + s.seat + '号</div>'
+      + '<div style="font-size:12.5px;color:' + (wolf ? 'var(--bad)' : 'var(--good)') + '">'
+      + escapeHtml(s.role) + '</div>' + dead;
+    grid.appendChild(card);
+  }
+  box.appendChild(grid);
+
+  const row = document.createElement('div');
+  row.style.marginTop = '10px';
+  const close = document.createElement('button');
+  close.className = 'ghost'; close.type = 'button'; close.textContent = '关闭';
+  close.onclick = () => box.remove();
+  row.appendChild(close);
+  if (m && m.save) {
+    const name = String(m.save).split(/[\\/]/).pop();
+    const rv = document.createElement('button');
+    rv.className = 'primary'; rv.type = 'button';
+    rv.textContent = '看复盘（发言/票型）';
+    rv.style.marginLeft = '8px';
+    rv.onclick = () => { box.remove(); openReview(name); };
+    row.appendChild(rv);
+  }
+  box.appendChild(row);
+  document.body.appendChild(box);
+}
+
 function onEnd(m) {
   $('thinking').textContent = '';
   lastEnd = { winner: m && m.winner, day: m && m.day, abandoned: !!(m && m.abandoned) };
@@ -3599,6 +3668,9 @@ function onEnd(m) {
   APP.launching = false;
   setModelBadge(0, '');
   resetStartButton();
+  // 2026-11-03（作者要求）：打完弹结算页（座位 + 全部身份 + 胜负）。
+  // 放弃的局不弹 —— 那不是"打完"，公开身份会变成下一局的剧透。
+  if (!m.abandoned && m.settlement) showSettlement(m.settlement, m);
   // 大厅的「上一局」卡片：刷新后也能看到刚打完的结果
   renderHome();
   maybeAskReport(m);                        // 每局问一次：要不要把结果交给房主算胜率
