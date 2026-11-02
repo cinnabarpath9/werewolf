@@ -32,6 +32,8 @@ import shutil
 import subprocess
 import sys
 
+from release_rules import sanitize_config, assert_packaged  # noqa: E402
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DIST = os.path.join(ROOT, "dist")
 TOOLS = os.path.join(ROOT, "tools")
@@ -177,8 +179,19 @@ def main() -> int:
         copied += 1
         print(f"   + {name}/")
 
-    # 就地清洗（作者个人信息 / 本机地址）
+    # 就地清洗：config.yaml 走结构化改写 + 断言（2026-11-03 审查 P1-10）
+    cfg_path = os.path.join(out, "config.yaml")
+    if os.path.isfile(cfg_path):
+        raw_cfg = open(cfg_path, encoding="utf-8-sig").read()
+        text, cfg = sanitize_config(raw_cfg)
+        assert_packaged(cfg)                 # 阵容没清干净 → 直接非 0 退出
+        open(cfg_path, "w", encoding="utf-8", newline="\n").write(text)
+        print(f"   ~ 已清洗：config.yaml（seats 清空，兜底 "
+              f"{(cfg.get('llm') or {}).get('default', {}).get('profile')}）")
+
     for rel, rules in SANITIZE.items():
+        if rel == "config.yaml":
+            continue
         full = os.path.join(out, rel)
         if not os.path.isfile(full):
             continue

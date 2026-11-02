@@ -1122,11 +1122,22 @@ class Room:
         return client, ""
 
     async def autopilot(self, ws, seat: int) -> None:
+        """调一次托管模型，替玩家出这一手。
+
+        2026-11-03 审查修复：
+          · P1-5：落地前核对 `ask_id` —— 慢模型期间旧问题可能已经被放掉、同座位来了新问题，
+            旧答案绝不能解掉新 future；
+          · P1-6：本函数由 WS 处理器用 `create_task` 起后台任务，**不再阻塞该连接的读循环**
+            （以前托管 180 秒内玩家手答/ping 全部堆着）；
+          · P2：client 用完即关（以前没进 clients_llm，永远不释放）。
+        """
         from wolf.context import Task                       # noqa: PLC0415
-        pending = self.pending_asks.get(int(seat))
+        seat = int(seat)
+        pending = self.pending_asks.get(seat)
         if not pending:
             self.send_to(ws, {"type": "notice", "text": "现在没有等你的行动，托管用不上。"})
             return
+        ask_id = pending.get("ask_id")
         client, err = self.butler_client()
         if client is None:
             self.send_to(ws, {"type": "notice", "text": "🤖 " + err})
@@ -1135,29 +1146,39 @@ class Room:
         task = Task(kind=pending.get("kind") or "", text=pending.get("text") or "",
                     schema=pending.get("schema") or "",
                     legal=list(pending.get("legal") or []),
-                    extra=dict(pending.get("extra") or {}))
+                    extra=dict(pending.get("extra") or {}),
+                    required=tuple(pending.get("required") or ()))
+        agent = LLMAgent(client, seat)
         try:
-            action = await asyncio.wait_for(
-                LLMAgent(client, int(seat)).ask(pending.get("packet") or "", task),
-                timeout=180)
+            action = await asyncio.wait_for(agent.ask(pending.get("packet") or "", task),
+                                            timeout=180)
         except Exception as exc:                          # noqa: BLE001
             self.send_to(ws, {"type": "notice",
                               "text": f"🤖 托管失败：{type(exc).__name__}: {exc}（你可以自己决策）"})
             return
-        future = self.asks.get(int(seat))
+        finally:
+            try:
+                await client.aclose()
+            except Exception:                              # noqa: BLE001
+                pass
+        current = self.pending_asks.get(seat)
+        if not current or current.get("ask_id") != ask_id:
+            self.send_to(ws, {"type": "notice",
+                              "text": "🤖 你想的这一手已经过期（问题被重发/超时了），这次不提交。"})
+            return
+        future = self.asks.get(seat)
         if future is None or future.done():
             self.send_to(ws, {"type": "notice", "text": "🤖 这一手已经答过了。"})
             return
-        self.pending_asks.pop(int(seat), None)
-        if self.pending_ask is pending:
+        self.pending_asks.pop(seat, None)
+        if self.pending_ask is current:
             self.pending_ask = next(iter(self.pending_asks.values()), None)
         future.set_result(dict(action or {}))
-        done = {"type": "ask_done", "seat": int(seat), "ask_id": pending.get("ask_id")}
+        done = {"type": "ask_done", "seat": seat, "ask_id": ask_id}
         for other in list(self.clients.keys()):
-            if self.viewer_seat(other) == int(seat):
+            if self.viewer_seat(other) == seat:
                 self.send_to(other, done)
         self.send_to(ws, {"type": "notice", "text": "🤖 托管已替你出完这一手（不满意可以下一手自己来）。"})
-
 
     def drop_ask(self, seat_id: int, future=None) -> None:
         """一手答完/超时之后清理（只清自己那一手，别误删同座位更新的一手）。"""
@@ -1523,15 +1544,21 @@ class Room:
             _base = _prov.get("base_url") or ""
             _model = _prov.get("model") or ""
             _secret = _prov.get("api_key") or ""
+            _temp = _prov.get("temperature")
+            _tokens = _prov.get("max_tokens")
+            _style = str(_prov.get("style") or "plain")
             spec = routing.SeatLLM(
                 base_url=_base,
                 api_key=_secret,
                 model=_model,
-                temperature=float(self.session_provider.get("temperature") or 1.0),
-                max_tokens=int(self.session_provider.get("max_tokens") or 20000),
+                # 审查 P2：`or` 会把合法的 0 当缺省；这里只在"没填"时兜底
+                temperature=(1.0 if _temp is None else float(_temp)),
+                max_tokens=(20000 if _tokens is None else int(_tokens)),
                 timeout=float(getattr(self, "call_timeout", 450) or 450),
-                thinking={"speech": {1: "low"}, "decision": {1: "low"}, "aux": {1: "low"}},
-                thinking_style=str(self.session_provider.get("style") or "plain"),
+                # plain 风格本来就不发任何思考参数，配档位是空转（审查 P2）—— 干脆留空
+                thinking=({} if _style == "plain" else
+                          {"speech": {1: "low"}, "decision": {1: "low"}, "aux": {1: "low"}}),
+                thinking_style=_style,
             )
             client = routing.build_client(spec, label=f"{seat.id}号/{spec.model}")
             self.clients_llm.append(client)
@@ -2235,6 +2262,10 @@ class Room:
                 seed = int(message.get("seed") or 0)
             except (TypeError, ValueError):
                 seed = 0
+            info = self.viewer_info(ws)
+            if info.get("role") != "host":
+                self.send_to(ws, {"type": "error", "text": "只有主机能开局"})
+                return
             prov = message.get("provider")
             if self.demo_mode:
                 if isinstance(prov, dict) and prov.get("api_key") and prov.get("base_url") and prov.get("model"):
@@ -2251,14 +2282,15 @@ class Room:
                                       "text": "这是公共体验实例：先在首页填你自己的 base_url / 模型名 / key（只存在你自己的浏览器里），"
                                               "或者勾「离线演练」先看流程。"})
                     return
-            info = self.viewer_info(ws)
-            if info.get("role") != "host":
-                self.send_to(ws, {"type": "error", "text": "只有主机能开局"})
-                return
             multi = bool(message.get("multiplayer")) or self.multiplayer
-            result = await self.start_safe(bool(message.get("mock")), message.get("human_seat"),
-                                           seed, message.get("board"), multiplayer=multi)
+            try:
+                result = await self.start_safe(bool(message.get("mock")), message.get("human_seat"),
+                                               seed, message.get("board"), multiplayer=multi)
+            except Exception:                            # noqa: BLE001
+                self.session_provider = {}              # 开不起来就把访客 key 丢掉
+                raise
             if not result.get("ok"):
+                self.session_provider = {}
                 self.broadcast({"type": "error", "text": result.get("error") or "开局失败"})
         elif kind == "hello":
             # 玩家进来/改名字。名字只做展示，限长、去控制字符。
@@ -2355,7 +2387,8 @@ class Room:
             if not seat:
                 self.send_to(ws, {"type": "notice", "text": "只有坐座位的玩家才能托管。"})
             else:
-                await self.autopilot(ws, seat)
+                # P1-6：后台跑，别把这条连接的读循环堵住
+                asyncio.create_task(self.autopilot(ws, seat))
         elif kind == "action":
             # ⚠️ 2026-10-08 修（自查发现的 P2-1，真协议缺陷）：
             #    客户端回传的 `ask_id` 以前**只被回显、从不校验**。断线时玩家在旧面板上
@@ -3822,7 +3855,9 @@ async def api_settings_butler(request: Request):
     """保存「托管模型」：选一条已配置的 API，玩家点托管时用它替玩家出一手。"""
     if not client_ok(request):
         return JSONResponse({"ok": False, "error": "缺少客户端标识"}, status_code=403)
-    body = await _read_json_body(request) or {}
+    body = await _read_json_body(request)
+    if body is None:                       # 坏 JSON 不能当空体：那会把已存的托管设置清空
+        return JSONResponse({"ok": False, "error": "请求体不是合法 JSON"}, status_code=400)
     problem = token_error(request, body)
     if problem:
         return JSONResponse({"ok": False, "error": problem}, status_code=401)
@@ -3831,12 +3866,12 @@ async def api_settings_butler(request: Request):
                              "error": "这是公共体验实例，不允许改服务端设置（你的 key 请填在首页，只存你自己的浏览器）。"},
                             status_code=403)
     data = settings_store.load(HERE)
-    data["butler"] = {
-        "api": body.get("api") or "",
-        "thinking": body.get("thinking") or "",
-        "temperature": body.get("temperature"),
-        "max_tokens": body.get("max_tokens"),
-    }
+    # 只覆盖"请求里真的带了的字段"：页面只发 api/thinking 时，温度/上限不该被清空
+    butler = dict(data.get("butler") or {})
+    for key in ("api", "thinking", "temperature", "max_tokens"):
+        if key in body:
+            butler[key] = body.get(key)
+    data["butler"] = butler
     try:
         settings_store.save(HERE, data)
     except Exception as exc:                              # noqa: BLE001
@@ -4302,7 +4337,10 @@ def main() -> int:
     global ROOM
     parser = argparse.ArgumentParser(description="AI 狼人杀手机端服务")
     parser.add_argument("--host", default="0.0.0.0")
-    parser.add_argument("--port", type=int, default=8077)
+    # ⚠️ 2026-11-03 审查 P1-13：Render/Koyeb 这类平台会注入 `$PORT`，容器里写死 8077
+    #    会被平台判"没有监听端口"。所以默认值改成先读环境变量，再退回 8077。
+    _port_default = int(os.environ.get("PORT") or os.environ.get("WOLF_PORT") or 8077)
+    parser.add_argument("--port", type=int, default=_port_default)
     parser.add_argument("--config", default=os.path.join(HERE, "config.yaml"))
     parser.add_argument("--mock-default", action="store_true", help="新开局的默认模式是离线演练")
     args = parser.parse_args()

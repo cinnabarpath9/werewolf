@@ -240,14 +240,19 @@ window.__wolfEvent = (raw) => {
     box.scrollTop = box.scrollHeight;
   } else if (m.kind === 'end') {
     log('结束：' + m.winner + '（第 ' + m.day + ' 天）');
-    $('state').textContent = '本局结束：' + (m.winner === 'good' ? '好人胜' : m.winner === 'wolf' ? '狼人胜' : m.winner);
+    $('state').textContent = '本局结束：' + ({good:'好人胜', wolf:'狼人胜', drawn:'平局', aborted:'已中止'}[m.winner] || m.winner);
   }
 };
 
+let askToken = 0;
 window.__wolfAsk = (raw) => {
   const ask = JSON.parse(raw);
+  const my = ++askToken;                 // 审查 P2：只认最新一问，旧面板点了不会顶掉新问题
   return new Promise((resolve) => {
-    askResolve = (payload) => { askResolve = null; $('ask').classList.remove('on'); resolve(JSON.stringify(payload)); };
+    askResolve = (payload) => {
+      if (my !== askToken) return;
+      askResolve = null; $('ask').classList.remove('on'); resolve(JSON.stringify(payload));
+    };
     renderAsk(ask);
   });
 };
@@ -256,11 +261,6 @@ function escapeHtml(s) {
   return String(s).replace(/[&<>"]/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;' }[c]));
 }
 
-const FIELD = {
-  vote: 'vote', wolf_kill: 'target', wolf_talk: 'target', seer_check: 'check',
-  guard: 'target', dream: 'target', hunter_shoot: 'target', wolf_king_take: 'target',
-  sheriff_vote: 'vote', badge: 'pass_to',
-};
 const LABEL = {
   speech: '轮到你发言', sheriff_speech: '轮到你竞选发言', vote: '轮到你投票',
   wolf_kill: '狼队：今晚杀谁', wolf_talk: '狼队讨论', seer_check: '预言家查验',
@@ -272,6 +272,7 @@ const LABEL = {
 
 function renderAsk(ask) {
   $('ask').classList.add('on');
+  setTimeout(() => { try { $('ask').scrollIntoView({ block: 'nearest', behavior: 'smooth' }); } catch (e) {} }, 30);
   $('askTitle').textContent = LABEL[ask.kind] || '轮到你行动';
   $('askText').textContent = ask.text || '';
   const body = $('askBody');
@@ -304,7 +305,7 @@ function renderAsk(ask) {
   const btn = (text, payload) => {
     const b = document.createElement('button');
     b.textContent = text;
-    b.onclick = () => send(payload);
+    b.onclick = () => send(typeof payload === 'function' ? payload() : payload);
     return b;
   };
 
@@ -325,17 +326,26 @@ function renderAsk(ask) {
     reason.placeholder = '一句话理由（可空）';
     if (canSave) {
       const r1 = document.createElement('div'); r1.className = 'row';
-      r1.appendChild(btn('💉 用解药救人', { save: true, poison: null, reason: reason.value || '救人' }));
-      r1.appendChild(btn('不用解药', { save: false, poison: null, reason: reason.value || '不救' }));
+      r1.appendChild(btn('💉 用解药救人', () => ({ save: true, poison: null, reason: (reason.value || '').trim() || '救人' })));
+      r1.appendChild(btn('不用解药', () => ({ save: false, poison: null, reason: (reason.value || '').trim() || '不救' })));
       body.appendChild(r1);
     }
     if (canPoison && legal.length) {
       const r2 = document.createElement('div'); r2.className = 'row';
       for (const n of legal) {
-        r2.appendChild(btn('☠ 毒 ' + n + '号', { save: false, poison: n, reason: reason.value || '毒' }));
+        r2.appendChild(btn('☠ 毒 ' + n + '号',
+          () => ({ save: false, poison: n, reason: (reason.value || '').trim() || '毒' })));
       }
-      r2.appendChild(btn('不毒', { save: false, poison: null, reason: '不用毒' }));
+      r2.appendChild(btn('不毒',
+        () => ({ save: false, poison: null, reason: (reason.value || '').trim() || '不用毒' })));
       body.appendChild(r2);
+    }
+    // 审查 P1-7：两瓶药都用完（或候选为空）时以前一个按钮都没有 → 只能等超时
+    if (!canSave && (!canPoison || !legal.length)) {
+      const r3 = document.createElement('div'); r3.className = 'row';
+      r3.appendChild(btn('空过（今晚不用药）',
+        () => ({ save: false, poison: null, reason: '没有可用的药' })));
+      body.appendChild(r3);
     }
     body.appendChild(reason);
     return;

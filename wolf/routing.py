@@ -35,7 +35,7 @@ class SeatLLM:
     #: 开了思考时输出可能上千 token，给小了会把 JSON 截断（截断=这一手作废），
     #: 所以默认值就按"够用"来（config.yaml 里也是 4000）
     max_tokens: int = 4000
-    timeout: float = 90.0
+    timeout: float = 200.0
     #: 上游波动（中转站 5xx / 超时 / 限流）时的自动重试次数。
     #: 4 = 首次失败后再试 4 次（共 5 次请求，退避 1.5/3/4.5/6 秒）；
     #: 4 次都失败就交给 engine 的 on_stall：**暂停对局**问用户（见 config.yaml 的 game.stall_timeout）。

@@ -41,3 +41,7 @@ tests/tmp/
 
 # 测试临时输出（跑一次就生成，别入库）
 /tests/tmp_*
+
+# 2026-11-03：静态托管产物由 tools/build_play_site.py 生成，不再进仓库
+dist-play/
+dist/

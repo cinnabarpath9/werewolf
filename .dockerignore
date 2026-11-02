@@ -16,3 +16,6 @@ __pycache__/
 .git/
 .github/
 *.zip
+docs/
+dist-play/
+tools/exam_2026*.yaml

@@ -74,6 +74,7 @@ WARN = [
 
 #: 文本类扩展名才扫内容
 TEXT_EXT = {".py", ".md", ".txt", ".json", ".yaml", ".yml", ".cfg", ".ini", ".env",
+               ".bat", ".cmd",
             ".sh", ".ps1", ".html", ".js", ".css", ".toml"}
 
 #: 存档文件名形态（`game-2026...json` / `game-*.json` 都要拦）
@@ -89,15 +90,8 @@ PERSONAL_PATTERNS = [
 ]
 
 #: 疑似真实密钥（占位符 ${X} / xxx / <your-key> 不会命中：它们不是 24+ 位的字母数字串）
-KEY_PATTERNS = [
-    (re.compile(r"sk-[A-Za-z0-9_\-]{20,}"), "疑似 OpenAI 风格 key（sk-…）"),
-    (re.compile(r"ghp_[A-Za-z0-9]{20,}"), "疑似 GitHub token（ghp_…）"),
-    (re.compile(r"AKIA[0-9A-Z]{16}"), "疑似 AWS key（AKIA…）"),
-    # ⚠️ 2026-11-02：**必须带引号**才算硬编码。以前 `api_key=<表达式>` 也会命中，
-    #    于是 `api_key=self.session_provider.get("api_key")` 这种正常代码被误判（实测踩到）。
-    (re.compile(r"(?i)\b(api[_-]?key|secret[_-]?key|access[_-]?token)\b\s*[:=]\s*"
-                r"['\"][A-Za-z0-9_\-\.]{24,}['\"]"), "疑似硬编码的 key/token"),
-]
+# 2026-11-03 审查 P1-9：规则与清洗端共用一份（tools/release_rules.py）
+from release_rules import KEY_PATTERNS  # noqa: E402
 
 
 class Result:
@@ -113,7 +107,10 @@ class Result:
 
 
 def _norm(rel: str) -> str:
-    return rel.replace("\\", "/").lstrip("./") if rel.startswith("./") else rel.replace("\\", "/")
+    rel = rel.replace("\\", "/")
+    while rel.startswith("./"):        # 审查 P2：lstrip("./") 会把 ".env" 削成 "env"
+        rel = rel[2:]
+    return rel
 
 
 def list_dir(root: str) -> list[str]:

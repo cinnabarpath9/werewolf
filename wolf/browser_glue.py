@@ -22,6 +22,20 @@ from wolf.engine import Game
 from wolf.roles import make_board
 
 
+def may_see(visible_to, human_id: int, human_is_wolf: bool) -> bool:
+    """这条台账该不该给这个玩家看（2026-11-03 审查 P0-1）。
+
+    与 server 的规则一致：`public` 人人可见；`seat:N` 只给该座位；`wolf` 只给狼。
+    空 `visible_to` 当作公开（老存档/引擎缺省）。
+    """
+    vis = set(visible_to or ())
+    if not vis or "public" in vis:
+        return True
+    if f"seat:{int(human_id)}" in vis:
+        return True
+    return bool("wolf" in vis and human_is_wolf)
+
+
 class BridgeHuman:
     """把「轮到你」交给页面，等玩家点完再返回。"""
 
@@ -76,13 +90,15 @@ class BrowserClient:
             "max_tokens": self.max_tokens,
             "temperature": self.temperature,
         }
-        resp = await pyfetch(
+        import asyncio, time as _time
+        started = _time.monotonic()
+        resp = await asyncio.wait_for(pyfetch(
             url=self.base_url + "/chat/completions",
             method="POST",
             headers={"Authorization": "Bearer " + self.api_key,
                      "Content-Type": "application/json"},
             json=payload,
-        )
+        ), timeout=150)
         if resp.status >= 400:
             body = await resp.string()
             raise llm.LLMError(f"HTTP {resp.status}: {body[:200]}", status=resp.status)
@@ -95,9 +111,11 @@ class BrowserClient:
             "model": self.model, "raw": text, "reasoning": "", "thinking": {},
             "prompt_tokens": int((data.get("usage") or {}).get("prompt_tokens") or 0),
             "completion_tokens": int((data.get("usage") or {}).get("completion_tokens") or 0),
-            "cached_tokens": 0, "elapsed": 0.0, "stream": False,
+            "cached_tokens": 0, "elapsed": round(_time.monotonic() - started, 2),
+            "stream": False,
         }
         self.usage["calls"] += 1
+        self.usage["seconds"] += _time.monotonic() - started
         return llm.extract_json(text)
 
 
@@ -130,11 +148,21 @@ async def run_game(board: str, human_seat: int, base_url: str, model: str,
     """跑一局，返回 winner（good/wolf/draw）。事件通过页面的 __wolfEvent 发出。"""
     from js import window
 
+    seed = int(seed or 7)          # 审查 P2：以前 MockAgent 与 Game 各用一套 seed
     cfg = {"human_seat": int(human_seat), "base_url": base_url, "model": model,
-           "api_key": api_key, "mock": bool(mock), "seed": int(seed or 7)}
+           "api_key": api_key, "mock": bool(mock), "seed": seed}
+
+    # 2026-11-03 审查 P0-1：**信息隔离必须在投递前做**。
+    # 以前把台账原样发给页面，玩家能直接看到狼队夜聊和别人的私有信息。
+    # 规则与 server 一致：public 人人可见；seat:N 只给该座位；wolf 只给狼。
+    human_id = int(human_seat)
+    human_is_wolf = False
 
     def on_event(kind: str, **data) -> None:
         entry = data.get("entry")
+        if entry is not None and kind == "ledger":
+            if not may_see(getattr(entry, "visible_to", ()), human_id, human_is_wolf):
+                return
         payload: dict = {"kind": kind}
         if entry is not None:
             payload["entry"] = {
@@ -160,14 +188,31 @@ async def run_game(board: str, human_seat: int, base_url: str, model: str,
         playbook = tabletalk.load_playbook(root)
         meta = tabletalk.load_meta_book(root, "")
         prompt = tabletalk.player_prompt({}, root)
-    except Exception:                                   # noqa: BLE001
+        if not playbook:
+            raise RuntimeError("playbook 是空的（content/05_战术书.md 没读到？）")
+    except Exception as exc:                            # noqa: BLE001
         playbook, meta, prompt = "", "", ""
+        # 审查 P2：以前静默降级成"AI 变笨"；现在把原因送到页面调试日志
+        try:
+            from js import window
+            window.__wolfEvent(json.dumps(
+                {"kind": "warn", "text": f"规则/打法没加载上（{type(exc).__name__}: {exc}），本局 Prompt 会偏弱"},
+                ensure_ascii=False))
+        except Exception:                               # noqa: BLE001
+            pass
 
-    game = Game(board=make_board(board), human_seat=int(human_seat) or 0,
-                agent_factory=_factory(cfg), seed=seed or None,
+    board_def = make_board(board)
+    game = Game(board=board_def, human_seat=int(human_seat) or 0,
+                agent_factory=_factory(cfg), seed=seed,
                 max_days=int(max_days), on_event=on_event,
                 playbook_text=playbook, meta_text=meta, player_prompt=prompt,
                 rules_mode="packet", rules_detail="brief")
+    try:
+        me = next((s for s in game.seats if int(s.id) == human_id), None)
+        human_is_wolf = bool(me and getattr(me, "camp", "") in ("wolf", "狼人"))
+    except Exception:                                   # noqa: BLE001
+        human_is_wolf = False
+
     winner = await game.run()
     on_event("end", winner=winner, day=game.day)
     return winner

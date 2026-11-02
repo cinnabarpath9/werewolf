@@ -69,6 +69,8 @@ _LOCK = threading.Lock()
 # 结构
 # --------------------------------------------------------------------------- #
 
+MAX_SEATS = 18              # 与 config.yaml 的 5~18 人自定义板对齐
+
 def empty() -> dict:
     #: `butler` = 托管模型（2026-11-02）：玩家不想自己决策时，调它替玩家出一手。
     return {"version": 1, "apis": [], "seats": {}, "voice": {}, "butler": {}}
@@ -169,7 +171,7 @@ def normalize(raw) -> dict:
                 seat = int(str(key).strip())
             except (TypeError, ValueError):
                 continue
-            if not 1 <= seat <= 12:
+            if not 1 <= seat <= MAX_SEATS:
                 continue
             try:
                 pid = normalize_id(value)
@@ -178,6 +180,9 @@ def normalize(raw) -> dict:
             data["seats"][str(seat)] = pid
     data["voice"] = normalize_voice(raw.get("voice"))
     data["butler"] = normalize_butler(raw.get("butler"))
+    # 注：这里**不校验 api 是否还在 apis 列表里**（2026-11-03 审查曾建议校验，但撤回）：
+    # .env 里的 `<档案名>_BASE_URL` 也是合法档案，而本模块不读 .env；
+    # 一旦按 apis 列表删，正常用户的托管选择会被无声清空。孤儿档案交给 butler_client 报错即可。
     return data
 
 
@@ -397,6 +402,7 @@ def public(data: dict) -> dict:
     return {
         "apis": apis,
         "seats": dict(data["seats"]),
+        "butler": dict(data.get("butler") or {}),      # 2026-11-03 审查 P1-1：以前漏了这个键
         "voice": {
             "base_url": voice.get("base_url") or os.environ.get("VOICE_BASE_URL", ""),
             "tts_model": voice.get("tts_model") or os.environ.get("TTS_MODEL", ""),
@@ -454,7 +460,7 @@ def set_seats(data: dict, seats) -> dict:
         if value in (None, ""):
             continue
         seat = int(str(key).strip())
-        if not 1 <= seat <= 12:
+        if not 1 <= seat <= MAX_SEATS:
             raise ValueError("座位号只能是 1~12")
         clean[str(seat)] = normalize_id(value)
     data["seats"] = clean
