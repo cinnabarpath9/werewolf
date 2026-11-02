@@ -137,7 +137,11 @@ def main() -> int:
 
     ver = version()
     flavor = args.flavor
-    out = os.path.abspath(args.out or os.path.join(DIST, f"werewolf-{flavor}-{ver}"))
+    # 2026-11-03（作者要求）：包名带中文后缀，一眼看出该装在哪种设备上。
+    #   desktop = 电脑上跑服务（Windows）→ 「电脑端」
+    #   android = 手机 Termux 跑服务      → 「手机端」
+    flavor_label = {"desktop": "电脑端", "android": "手机端"}[flavor]
+    out = os.path.abspath(args.out or os.path.join(DIST, f"werewolf-{ver}-{flavor_label}"))
     if os.path.exists(out):
         if not inside_dist(out):
             print(f"❌ 输出目录已存在，而且不在 dist/ 下，拒绝删除：{out}")
@@ -239,7 +243,7 @@ def main() -> int:
             return proc.returncode or 1
 
     if args.zip:
-        base = os.path.join(DIST, f"werewolf-{flavor}-{ver}")
+        base = os.path.join(DIST, f"werewolf-{ver}-{flavor_label}")
         print(f"\n== 打 zip：{base}.zip ==")
         shutil.make_archive(base, "zip", root_dir=DIST, base_dir=os.path.basename(out))
         print(f"   {base}.zip")

@@ -18,7 +18,17 @@ import zipfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 OUT = os.path.join(ROOT, "dist-play")
-ZIP = os.path.join(ROOT, "dist", "werewolf-play-site.zip")
+#: 2026-11-03（作者要求）：静态站包也带版本 + 中文后缀
+def _site_version() -> str:
+    try:
+        import json
+        with open(os.path.join(ROOT, "web", "site.json"), encoding="utf-8-sig") as fh:
+            return str(json.load(fh).get("version") or "x")
+    except Exception:                                    # noqa: BLE001
+        return "x"
+
+
+ZIP = os.path.join(ROOT, "dist", f"werewolf-{_site_version()}-在线试玩站.zip")
 
 PY_FILES = [
     "__init__.py", "engine.py", "roles.py", "context.py", "rules.py", "words.py",
