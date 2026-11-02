@@ -145,10 +145,19 @@ document.querySelectorAll('.board').forEach(el => {
   };
 });
 
+// ⚠️ 本页在 /web/ 下，而 wolf/ 与 content/ 在仓库根 —— 相对路径会 404（实测过）。
+// 先试根路径，再试同目录（把页面单独拷出去托管时用得上）。
 async function fetchText(path) {
-  const res = await fetch(path, { cache: 'no-store' });
-  if (!res.ok) throw new Error(`${path}: HTTP ${res.status}`);
-  return await res.text();
+  const tries = ['../' + path, path];
+  let lastErr = null;
+  for (const url of tries) {
+    try {
+      const res = await fetch(url, { cache: 'no-store' });
+      if (res.ok) return await res.text();
+      lastErr = new Error(`${url}: HTTP ${res.status}`);
+    } catch (e) { lastErr = e; }
+  }
+  throw lastErr || new Error('取不到 ' + path);
 }
 
 async function boot() {
