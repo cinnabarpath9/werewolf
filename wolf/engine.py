@@ -2664,7 +2664,9 @@ class Game:
         candidates: list[int] = []
         front: list[int] = []     # 前置位上警：先发言
         back: list[int] = []      # 后置位上警：听完前置位再发言（总结、拉票、号召投票）
-        for seat in sorted(self.alive, key=lambda s: s.id):
+        run_order = [s.id for s in sorted(self.alive, key=lambda s: s.id)]
+        for idx, seat_id in enumerate(run_order):
+            seat = self.seat_by_id(seat_id)
             if not seat.alive:
                 continue          # 防御：这个循环里每次 await 之前都重看一眼存活
             # ⚠️ 2026-10-10 作者口径：**本板子预言家锁定上警，不问他**（省一次调用）。
@@ -2722,9 +2724,14 @@ class Game:
                                             badge_lost=(self._election_open and not suspended),
                                             take=reply.get("take"))
                 if suspended:
-                    self._badge_suspend = {"day": day, "candidates": list(candidates),
-                                           "front": list(front), "back": list(back),
-                                           "spoken": []}
+                    # 上警轮还没走完：把"没被问过的座位"一起记下来，第二天恢复时补问，
+                    # 否则候选名单会残缺（实测：1 号狼在上警决策里自爆 → 剩下的人根本没被问）
+                    self._badge_suspend = {
+                        "day": day, "candidates": list(candidates),
+                        "front": list(front), "back": list(back), "spoken": [],
+                        "pending_run": [i for i in run_order[idx + 1:]
+                                        if self.seat_by_id(i).alive],
+                    }
                 return
             where = self._run_position(reply.get("run"))
             if where is not None:
@@ -2932,7 +2939,12 @@ class Game:
         return True
 
     async def resume_badge_election(self, day: int) -> bool:
-        """恢复被单狼自爆挂起的警长竞选。返回 True = 当天到此为止（双爆了）。"""
+        """恢复被单狼自爆挂起的警长竞选。返回 True = 当天到此为止（双爆了）。
+
+        恢复要补两件事：
+          ① 如果第一只狼是在**上警轮里**爆的，当时还没表态的人要补问（否则候选名单残缺）；
+          ② 竞选发言只补没发过言的人，然后投票定警徽。
+        """
         state = self._badge_suspend
         if not state:
             return False
@@ -2944,6 +2956,34 @@ class Game:
         front = [i for i in (state.get("front") or []) if i in cands]
         back = [i for i in (state.get("back") or []) if i in cands]
         spoken = [i for i in (state.get("spoken") or []) if i in cands]
+
+        # ① 补完被打断的"上警"半轮
+        pending_run = [i for i in (state.get("pending_run") or [])
+                       if self.seat_by_id(i).alive]
+        if pending_run:
+            self.ledger.add(day, "day", "announce",
+                            "恢复上警阶段：第 1 天还没表态的人继续决定要不要上警"
+                            "（" + "、".join(f"{i}号" for i in pending_run) + "）。")
+            for seat_id in pending_run:
+                seat = self.seat_by_id(seat_id)
+                if not seat.alive:
+                    continue
+                reply = await self._ask_run_again(seat)
+                if self.can_explode(seat) and truthy(reply.get("explode"), default=False):
+                    # 补问期间又爆 = 第二只狼 → 双爆吞警徽
+                    await self._apply_explosion(seat.id, day, badge_lost=True,
+                                                take=reply.get("take"))
+                    self.ledger.add(day, "day", "announce",
+                                    "**双狼自爆**：警徽被吞，本局不再有警长；今天到此为止。")
+                    return True
+                where = self._run_position(reply.get("run"))
+                if where is not None:
+                    cands.append(seat.id)
+                    (front if where == "front" else back).append(seat.id)
+                self.ledger.add(day, "day", "announce",
+                                f"{seat.id}号 " + ("上警（补）。" if where else "不上警（补）。"),
+                                seat=seat.id)
+
         if not cands:
             self._badge_lost("恢复竞选时已没有候选人")
             return False
@@ -2966,6 +3006,22 @@ class Game:
         finally:
             self._election_open = False
         return False
+
+    async def _ask_run_again(self, seat) -> dict:
+        """恢复竞选时补问一次"要不要上警"（只问没被问过的人）。"""
+        can_ex = self.can_explode(seat)
+        task = Task(
+            kind="sheriff_run",
+            text=("第 2 天：昨天警长竞选被自爆打断，现在**补问上警**：你要不要上警？\n"
+                  "· **前置位上警** / **后置位上警** / **不上警**（不上警也能投票选警长）。\n"
+                  + ("**你是狼：先回答要不要再自爆** —— 再爆 = 双狼自爆，警徽被吞（`explode`）。\n"
+                     if can_ex else "")),
+            schema=('{"explode": true/false, "run": "front" | "back" | false, '
+                    + KING_TAKE_SCHEMA + '"reason": "<一句理由>"}' if can_ex else
+                    '{"run": "front" | "back" | false, "reason": "<一句理由>"}'),
+            legal=[],
+        )
+        return await self.act(seat, task)
 
     async def _apply_explosion(self, who: int, day: int, badge_lost: bool,
                                take: int | None = None) -> None:

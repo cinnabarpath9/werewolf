@@ -174,6 +174,25 @@ asyncio.run(g2.run())
 check("4a 6 人板自爆照旧吞警徽（没有警长）", g2.sheriff_id is None, str(g2.sheriff_id))
 check("4b 6 人板没有「双狼自爆」的说法", not any("双狼自爆" in e.text for e in g2.ledger.entries))
 
+# ── 五、上警轮里就自爆：第二天要补问没表态的人 ───────────────────
+print("\n=== 五、上警轮里早爆：次日补问、竞选不残缺 ===")
+s = dict(BASE)
+# 1 号狼在自己"要不要上警"的决策里就爆 —— 此时 2~11 号还没被问
+s["sheriff_run"] = {1: {"run": True, "explode": True}, 5: {"run": "front"},
+                    2: {"run": "front"}, "*": {"run": False}}
+g, log = run(None, None, script_over=s)
+day1_run = {sid for sid, k, _t in log
+            if k == "sheriff_run" and "第 1 天" in (_t.text or "")}
+check("5a 第 1 天确实只问到 1 号就爆了（剧本前提成立）", day1_run == {1}, str(day1_run))
+check("5b 第二天补问了没表态的人",
+      len({sid for sid, k, _t in log
+           if k == "sheriff_run" and "补问" in (_t.text or "")}) >= 8,
+      str(sorted({sid for sid, k, _t in log if k == "sheriff_run"})))
+check("5c 补问公告写明「还没表态的人继续」",
+      text_has(g, "恢复上警阶段") and text_has(g, "还没表态"))
+check("5d 竞选没有因为残缺而直接流失（选出了警长）", g.sheriff_id is not None, str(g.sheriff_id))
+check("5e 台账里没有「恢复竞选时已没有候选人」", not text_has(g, "没有候选人"))
+
 print("\n" + "=" * 64)
 print(f"共 {N} 项：通过 {N - BAD}，失败 {BAD}")
 raise SystemExit(1 if BAD else 0)

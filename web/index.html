@@ -3588,6 +3588,7 @@ const DEATH_LABEL = { vote: '放逐', wolf: '夜里出局', poison: '被毒',
   guard: '奶穿', explode_take: '被狼王带走' };
 
 function showSettlement(st, m) {
+  if (!st || !Array.isArray(st.seats) || !st.seats.length) return;   // 旧服务端/空数据：不弹
   document.querySelectorAll('[data-panel="settlement"]').forEach(el => el.remove());
   const box = document.createElement('div');
   box.className = 'toast';
