@@ -13,6 +13,11 @@
   header { padding:14px 18px; border-bottom:1px solid var(--line); display:flex; gap:10px; align-items:center; }
   header b { font-size:16px; letter-spacing:.02em; }
   header .tag { font-size:11.5px; color:var(--dim); border:1px solid var(--line); padding:2px 8px; border-radius:99px; }
+  header .grow { flex:1; }
+  header .links { display:flex; gap:8px; flex-wrap:wrap; }
+  header .links a { font-size:12.5px; color:var(--acc); text-decoration:none; border:1px solid var(--line);
+                    padding:3px 10px; border-radius:99px; }
+  header .links a:hover { border-color:var(--acc); }
   main { max-width:920px; margin:0 auto; padding:18px; display:grid; gap:14px; }
   .card { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:14px 16px; }
   .card h3 { margin:0 0 8px; font-size:14.5px; }
@@ -51,6 +56,14 @@
   <b>AI 狼人杀 · 在线试玩</b>
   <span class="tag">引擎跑在你的浏览器里</span>
   <span class="tag">不需要服务器 / 不需要注册</span>
+  <span class="grow"></span>
+  <nav class="links">
+    <a href="https://afdian.com/a/langrensha" target="_blank" rel="noopener">爱发电</a>
+    <a href="https://github.com/cinnabarpath9/werewolf" target="_blank" rel="noopener">开源仓库</a>
+    <a href="https://pan.quark.cn/s/00bf04be5c63" target="_blank" rel="noopener">夸克网盘</a>
+    <a href="https://pan.baidu.com/s/1WfrytBb-xyHMDLlZUIN9Hw" target="_blank" rel="noopener">百度网盘</a>
+    <a href="https://qm.qq.com/q/68VcRJr3Py" target="_blank" rel="noopener">Q 群</a>
+  </nav>
 </header>
 
 <main>
@@ -160,8 +173,20 @@ async function fetchText(path) {
   throw lastErr || new Error('取不到 ' + path);
 }
 
+let bootT0 = Date.now(), bootTimer = 0;
+function bootProgress(stage) {
+  if (bootTimer) clearInterval(bootTimer);
+  bootT0 = Date.now();
+  bootTimer = setInterval(() => {
+    const s = Math.round((Date.now() - bootT0) / 1000);
+    $('state').textContent = `${stage}：已等待 ${s} 秒（首次要下 13MB，慢一点正常；之后走缓存）`;
+    if (s === 40) log('还没好？可能是网络慢。这个页面只在下一次打开时会走缓存，第一次必须下完。');
+  }, 1000);
+}
+function bootDone(text) { if (bootTimer) { clearInterval(bootTimer); bootTimer = 0; } $('state').textContent = text; }
+
 async function boot() {
-  $('state').textContent = '下载运行环境（约 13MB，首次会慢；之后走缓存）…';
+  bootProgress('下载运行环境');
   // 2026-11-02：**优先同源** web/pyodide/（避免 CDN 被墙），本地没有才回退 CDN。
   try {
     pyodide = await loadPyodide({ indexURL: './pyodide/' });
@@ -189,7 +214,7 @@ os.chdir('/wolf-wasm')
   log('引擎加载完成');
   $('btnStart').disabled = false;
   $('btnStart').textContent = '开始游戏';
-  $('state').textContent = '引擎已就绪（跑在你浏览器里）';
+  bootDone('引擎已就绪（跑在你浏览器里）');
 }
 
 window.__wolfEvent = (raw) => {
@@ -340,8 +365,11 @@ await _g.run_game(
   $('apiKey').value = p.apiKey || '';
   boot().catch(err => {
     log('❌ 环境加载失败：' + (err && err.message ? err.message : err));
-    $('state').innerHTML = '<span class="bad">引擎没加载起来（多半是 CDN 或被墙）。</span>';
-    $('btnStart').textContent = '引擎加载失败';
+    bootDone('');
+    $('state').innerHTML = '<span class="bad">引擎没加载起来（13MB 没下完 / 网络被打断）。</span>';
+    $('btnStart').textContent = '重试加载';
+    $('btnStart').disabled = false;
+    $('btnStart').onclick = () => location.reload();
   });
 })();
 </script>

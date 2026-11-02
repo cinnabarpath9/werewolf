@@ -1519,10 +1519,14 @@ class Room:
             return MockAgent(seat, self.rng)
         if self.session_provider:
             # 公共体验实例：用**访客自己填的那条**渠道（只在本局进程内用，不落盘）
+            _prov = self.session_provider
+            _base = _prov.get("base_url") or ""
+            _model = _prov.get("model") or ""
+            _secret = _prov.get("api_key") or ""
             spec = routing.SeatLLM(
-                base_url=self.session_provider.get("base_url") or "",
-                api_key=self.session_provider.get("api_key") or "",
-                model=self.session_provider.get("model") or "",
+                base_url=_base,
+                api_key=_secret,
+                model=_model,
                 temperature=float(self.session_provider.get("temperature") or 1.0),
                 max_tokens=int(self.session_provider.get("max_tokens") or 20000),
                 timeout=float(getattr(self, "call_timeout", 450) or 450),

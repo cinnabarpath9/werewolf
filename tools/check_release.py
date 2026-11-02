@@ -93,8 +93,10 @@ KEY_PATTERNS = [
     (re.compile(r"sk-[A-Za-z0-9_\-]{20,}"), "疑似 OpenAI 风格 key（sk-…）"),
     (re.compile(r"ghp_[A-Za-z0-9]{20,}"), "疑似 GitHub token（ghp_…）"),
     (re.compile(r"AKIA[0-9A-Z]{16}"), "疑似 AWS key（AKIA…）"),
+    # ⚠️ 2026-11-02：**必须带引号**才算硬编码。以前 `api_key=<表达式>` 也会命中，
+    #    于是 `api_key=self.session_provider.get("api_key")` 这种正常代码被误判（实测踩到）。
     (re.compile(r"(?i)\b(api[_-]?key|secret[_-]?key|access[_-]?token)\b\s*[:=]\s*"
-                r"['\"]?[A-Za-z0-9_\-\.]{24,}"), "疑似硬编码的 key/token"),
+                r"['\"][A-Za-z0-9_\-\.]{24,}['\"]"), "疑似硬编码的 key/token"),
 ]
 
 
