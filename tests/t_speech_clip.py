@@ -114,6 +114,29 @@ check("3a 台账里的发言被按句截断（transcript 保留原文，供复�
       bool(led) and len(led[-1].text) <= 900 and led[-1].text.endswith("……"),
       str(len(led[-1].text) if led else "没落账"))
 
+print("\n=== 四、其它落账口也截断（审查 P1：遗言/竞选/PK 以前漏了） ===")
+
+
+class LongLastWords:
+    uses_model = False
+
+    async def ask(self, packet, task):
+        return {"speech": long, "claim": "无"}
+
+    def last_meta(self):
+        return {}
+
+
+g3 = Game(board=make_board("six_all_reveal"), human_seat=0, max_days=1,
+          agent_factory=lambda seat: LongLastWords(), on_event=lambda *a, **k: None)
+g3.day, g3.phase = 1, "day"
+g3.seat_by_id(1).alive = False
+g3.seat_by_id(1).death_day = 1
+asyncio.run(g3.last_words(g3.seat_by_id(1)))
+tails = [e.text for e in g3.ledger.entries if e.kind == "speech" and "【遗言】" in (e.text or "")]
+check("4a 遗言也按句截断", bool(tails) and len(tails[-1]) <= 900 and tails[-1].endswith("……"),
+      str(len(tails[-1]) if tails else "no ledger"))
+
 print("\n" + "=" * 62)
 print(f"共 {N} 项：通过 {N - BAD}，失败 {BAD}")
 raise SystemExit(1 if BAD else 0)

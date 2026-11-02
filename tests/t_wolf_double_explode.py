@@ -87,7 +87,8 @@ BASE = {
 
 def run(explode_script: dict | None, second_explode: dict | None, **kw):
     script = dict(BASE)
-    script["sheriff_run"] = {5: {"run": "front"}, 1: {"run": "front"}, "*": {"run": False}}
+    script["sheriff_run"] = kw.pop("sheriff_run", None) or {5: {"run": "front"}, 1: {"run": "front"},
+                                                           "*": {"run": False}}
     script["wolf_explode"] = explode_script or {"*": {"explode": False}}
     # 第二次自爆：按"第 2 天"区分（同一个 kind，剧本里用 day 判断不了，这里换一个代理）
     log: list = []
@@ -95,7 +96,7 @@ def run(explode_script: dict | None, second_explode: dict | None, **kw):
     class Second(Scripted):
         async def ask(self, packet, task):
             self.log.append((self.seat_id, task.kind, task))
-            if task.kind == "wolf_explode" and "第 2 天" in (task.text or ""):
+            if task.kind == "wolf_explode" and (task.extra or {}).get("double_explode"):
                 table = second_explode or {"*": {"explode": False}}
                 reply = table.get(self.seat_id, table.get("*", {}))
                 return dict(reply) if isinstance(reply, dict) else {}
@@ -192,6 +193,25 @@ check("5c 补问公告写明「还没表态的人继续」",
       text_has(g, "恢复上警阶段") and text_has(g, "还没表态"))
 check("5d 竞选没有因为残缺而直接流失（选出了警长）", g.sheriff_id is not None, str(g.sheriff_id))
 check("5e 台账里没有「恢复竞选时已没有候选人」", not text_has(g, "没有候选人"))
+
+print("\n=== 六、恢复竞选期间再爆 = 双爆（不能又挂起） ===")
+s6 = dict(BASE)
+# 1/2 号狼都上警（1 号在第 1 天团队窗口爆，2 号成为恢复期唯一的狼候选人）
+s6["sheriff_run"] = {1: {"run": "front"}, 2: {"run": "front"}, 5: {"run": "front"},
+                     "*": {"run": False}}
+# 2 号的竞选发言里申请自爆（只在恢复竞选时才会被问到）
+s6["sheriff_speech"] = {2: {"explode": True, "speech": "（剧本）我再爆", "claim": "无"},
+                        "*": {"speech": "（剧本）竞选发言", "claim": "无"}}
+g6, log6 = run({1: {"explode": True, "who": 1}, 2: {"explode": True, "who": 1},
+                3: {"explode": True, "who": 1}, "*": {"explode": False}},
+               None, script_over=s6, sheriff_run=s6["sheriff_run"])
+check("6a 2 号在恢复期竞选发言里出局（死因自爆）",
+      not g6.seat_by_id(2).alive and g6.seat_by_id(2).death_cause == "explode",
+      f"alive={g6.seat_by_id(2).alive} cause={g6.seat_by_id(2).death_cause}")
+check("6b 公告写「双狼自爆」+ 警徽被吞", text_has(g6, "双狼自爆") and g6.sheriff_id is None,
+      f"sheriff={g6.sheriff_id}")
+_resumes = sum(1 for e in g6.ledger.entries if "警长竞选恢复（" in (e.text or ""))
+check("6c 只恢复过一次（不能反复挂起）", _resumes == 1, str(_resumes))
 
 print("\n" + "=" * 64)
 print(f"共 {N} 项：通过 {N - BAD}，失败 {BAD}")

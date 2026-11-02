@@ -43,7 +43,7 @@ from starlette.requests import ClientDisconnect  # noqa: E402
 from wolf import (experience, persona, reports, routing, rules, settings_store,  # noqa: E402
                   tabletalk, voice)
 from wolf.agents import LLMAgent, MockAgent, WebHumanAgent  # noqa: E402
-from wolf.engine import Game, parse_sheriff_setting, timeouts_from_cfg  # noqa: E402
+from wolf.engine import CAUSE_TEXT, Game, parse_sheriff_setting, timeouts_from_cfg  # noqa: E402, CAUSE_TEXT
 from wolf.llm import LLMError  # noqa: E402
 from wolf.roles import (BUILTIN_BOARDS, ROLES, board_summary, camp_label,  # noqa: E402
                         make_board, role_name, validate_board)
@@ -1080,15 +1080,22 @@ class Room:
     # 玩家这一手不想自己想（或者根本不知道该怎么决策）时，点「托管」：
     # **调用一次**单独配置的托管模型，看玩家自己的 packet（含他自己的发言与全场公示栏），
     # 替玩家出一手，然后当成玩家的答案交给引擎。
-    def butler_client(self):
-        """按「设置 → 模型 API → 托管模型」选的那条 API 建一个客户端。返回 (client, 错误说明)。"""
+    def butler_client(self, seat_id: int | None = None):
+        """按「设置 → 模型 API → 托管模型」选的那条 API 建一个客户端。返回 (client, 错误说明)。
+
+        2026-11-03 审查 P2：以前固定拿 1 号座位解析画像（多真人房里替别人托管会选错角色画像），
+        现在接收真正要托管的座位。
+        """
         local = settings_store.load(HERE)
         cfg_b = local.get("butler") or {}
         name = str(cfg_b.get("api") or "").strip().upper()
         if not name:
             return None, "还没配托管模型：设置 → 模型 API → 最下面「托管模型」选一条 API"
         game = getattr(self, "game", None)
-        seat = next((s for s in (game.seats if game else []) if s.id == 1), None)
+        want = int(seat_id or 0)
+        seat = next((s for s in (game.seats if game else []) if s.id == want), None)
+        if seat is None:
+            seat = next((s for s in (game.seats if game else []) if s.id == 1), None)
         if seat is None:
             class _Seat:                                  # resolve_profile 只要 id/role_key
                 id = 1
@@ -1114,8 +1121,9 @@ class Room:
         # 现在按渠道推断它能认哪套参数，再把档位真的发下去；推断不出来的仍用 plain（不发）。
         from wolf import butler as butler_mod                     # noqa: PLC0415
         level = str(cfg_b.get("thinking") or "").strip().lower()
-        spec.thinking = butler_mod.thinking_table(level)
-        spec.thinking_style = (level and butler_mod.infer_thinking_style(spec.base_url)) or "plain"
+        if level in ("off", "low", "high"):
+            spec.thinking = butler_mod.thinking_table(level)
+            spec.thinking_style = butler_mod.infer_thinking_style(spec.base_url)
         try:
             client = routing.build_client(spec, label=f"butler/{name}")
         except Exception as exc:                          # noqa: BLE001
@@ -1139,7 +1147,7 @@ class Room:
             self.send_to(ws, {"type": "notice", "text": "现在没有等你的行动，托管用不上。"})
             return
         ask_id = pending.get("ask_id")
-        client, err = self.butler_client()
+        client, err = self.butler_client(seat)
         if client is None:
             self.send_to(ws, {"type": "notice", "text": "🤖 " + err})
             return
@@ -1188,6 +1196,7 @@ class Room:
             meta = agent.last_meta() or {}
             meta = dict(meta)
             meta["butler"] = True
+            meta["packet"] = packet          # 真正发给模型的那份（复盘要看这个，不是人类面板提示）
             seat_obj = self.game.seat_by_id(seat) if self.game else None
             human_agent = getattr(seat_obj, "agent", None) if seat_obj else None
             if human_agent is not None:
@@ -2773,6 +2782,8 @@ def settlement_rows(game) -> list[dict]:
             "kind": (role.kind if role else ""),
             "alive": bool(seat.alive),
             "death_cause": str(getattr(seat, "death_cause", "") or ""),
+            # 死因文案的**唯一来源**是引擎的 CAUSE_TEXT；前端只用它，不再自己维护一份表
+            "death_text": CAUSE_TEXT.get(str(getattr(seat, "death_cause", "") or ""), ""),
         })
     return rows
 

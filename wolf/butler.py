@@ -53,7 +53,7 @@ def infer_thinking_style(base_url: str) -> str:
 
 
 def thinking_table(level: str) -> dict:
-    """把「思考档」变成 `LLMClient` 要的那张表；空/非法 = 不给（跟随渠道默认）。"""
+    """把「思考档」变成 `LLMClient` 要的那张表；空/非法 = 空表（客户端会回退它自己的默认档）。"""
     lv = str(level or "").strip().lower()
     if lv not in ("off", "low", "high"):
         return {}
@@ -88,7 +88,7 @@ def build_speech_call(game, seat, day: int):
         '"claim": "<你打算声称的身份，没有就写 无>", "stance": "<立场一句话>", '
         '"vote": <此刻倾向投谁>, "speech": "<你要说出口的话，口语化，350 字以内>"}'
     )
-    task = Task(kind="speech_plan", text=text, schema=schema, legal=others or None,
+    task = Task(kind="speech_plan", text=text, schema=schema, legal=list(others),
                 required=("reads", "vote", "speech"))
     return task, context.build(game, seat, task)
 

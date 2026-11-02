@@ -2205,7 +2205,7 @@ const BGM = (() => {
 
   function enabled() { return ls(KEY_ON, '1') === '1'; }
   function volume() { const v = Number(ls(KEY_VOL, '35')); return isNaN(v) ? 0.35 : Math.min(1, Math.max(0, v / 100)); }
-  function defaultSrc() { return 'audio/bgm.mp3'; }
+  function defaultSrc() { const v = (typeof SITE !== 'undefined' && SITE && SITE.version) || '1'; return 'audio/bgm.mp3?v=' + encodeURIComponent(v); }
 
   function openDB() {
     return new Promise((res, rej) => {
@@ -2279,7 +2279,8 @@ const BGM = (() => {
 
   async function importFile(file) {
     if (!file) return '';
-    if (!/^audio\//.test(file.type)) return '这个文件不是音频（要 mp3 / wav / ogg）';
+    const byExt = /\.(mp3|wav|ogg|m4a|aac|flac|opus)$/i.test(file.name || '');
+    if (!/^audio\//.test(file.type || '') && !byExt) return '这个文件不是音频（要 mp3 / wav / ogg）';
     if (file.size > 40 * 1024 * 1024) return '文件太大了（上限 40MB）';
     await putCustom(file);
     await loadTrack();
@@ -3737,8 +3738,7 @@ function toast(text, bad) {
 }
 
 const DEATH_LABEL = { vote: '放逐', wolf: '夜里出局', poison: '被毒',
-  king: '被狼王带走', explode: '自爆', shot: '被枪带走', dream: '被梦死',
-  guard: '奶穿', explode_take: '被狼王带走' };
+  king: '被狼王带走', explode: '自爆', hunter: '被枪带走', dream: '被梦死' };
 
 function showSettlement(st, m) {
   if (!st || !Array.isArray(st.seats) || !st.seats.length) return;   // 旧服务端/空数据：不弹
@@ -3760,8 +3760,8 @@ function showSettlement(st, m) {
     + '<div style="color:var(--dim);font-size:12.5px;margin:2px 0 10px">'
     + '第 ' + escapeHtml(st.day) + ' 天 · ' + escapeHtml(st.seats.length) + ' 人局'
     + (st.board ? ' · ' + escapeHtml(st.board) : '')
-    + '　·　狼 ' + (st.counts.wolf || 0) + ' / 神 ' + (st.counts.god || 0)
-    + ' / 民 ' + (st.counts.villager || 0) + '</div>';
+    + '　·　狼 ' + ((st.counts && st.counts.wolf) || 0) + ' / 神 ' + ((st.counts && st.counts.god) || 0)
+    + ' / 民 ' + ((st.counts && st.counts.villager) || 0) + '</div>';
   box.appendChild(head);
 
   const grid = document.createElement('div');
@@ -3779,7 +3779,7 @@ function showSettlement(st, m) {
     card.style.textAlign = 'center';
     card.style.opacity = s.alive ? '1' : '.62';
     const dead = s.alive ? '' : '<div style="font-size:11px;color:var(--dim)">'
-      + escapeHtml(DEATH_LABEL[s.death_cause] || '已出局') + '</div>';
+      + escapeHtml(s.death_text || DEATH_LABEL[s.death_cause] || '已出局') + '</div>';
     card.innerHTML = '<div style="font-weight:700">' + s.seat + '号</div>'
       + '<div style="font-size:12.5px;color:' + (wolf ? 'var(--bad)' : 'var(--good)') + '">'
       + escapeHtml(s.role) + '</div>' + dead;
@@ -4939,8 +4939,12 @@ async function openReview(want) {
   }
   if (!list) { toast('存档列表读不出来（服务端返回的不是 JSON）', true); return; }
   if (!list.games || !list.games.length) { toast('还没有存档，先打一局'); return; }
-  const name = (want && list.games.includes(want))
-    ? want : list.games[list.games.length - 1];
+  if (want && !list.games.includes(want)) {
+    // 2026-11-03 审查 P1：以前这里静默回退到最新一局 —— 用户点 A，看到的是 B。
+    toast('这一局已经不在存档里了（只保留最近若干局），换一条看吧', true);
+    return;
+  }
+  const name = want || list.games.filter(n => /^game-\d{8}-\d{6}\.json$/.test(n)).pop();
   // ① 首屏走轻量口径：`?lite=1`。老服务端会忽略这个参数、照旧回全文（行为不变）。
   const wantQS = tokenQS();
   const liteQS = '?lite=1' + (wantQS ? '&' + wantQS.slice(1) : '');

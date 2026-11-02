@@ -652,7 +652,9 @@ class Game:
                 "model": meta.get("model", ""),
                 # 这一手是不是"换家"打的（复盘/统计用：否则存档里只能看到模型名变过）
                 "fallback": str(meta.get("fallback_to") or ""),
-                "packet": packet,
+                # 托管发言会用 context.build 重拼一份 packet；它通过 meta.packet 交回来，
+                # 复盘里应该看到**真正发给模型的那份**（2026-11-03 审查 P2）
+                "packet": meta.get("packet") or packet,
                 "reply": got,
                 "raw": meta.get("raw", ""),
                 "reasoning": meta.get("reasoning", ""),      # 思考链（模型有返回才存）
@@ -2612,7 +2614,7 @@ class Game:
             # 模型没说话（或 mock 没这个词）：如实记一笔，不要替它编遗言
             self.ledger.add(self.day, "day", "announce", f"{seat.id}号 没有留下遗言。")
             return
-        self.ledger.add(self.day, "day", "speech", f"【遗言】{speech}", seat=seat.id)
+        self.ledger.add(self.day, "day", "speech", f"【遗言】{clip_speech(speech)}", seat=seat.id)
         claim = str(reply.get("claim") or "").strip()
         if claim and claim not in ("无", "none", "None", "-", "null"):
             self.ledger.add(self.day, "day", "claim",
@@ -2905,13 +2907,13 @@ class Game:
         async def one(wolf: Seat):
             task = Task(
                 kind="wolf_explode",
-                text=("第 2 天：昨天已经有一只狼自爆，警长竞选被挂起、**警徽还没吞**。\n"
+                text=(f"第 {day} 天：昨天已经有一只狼自爆，警长竞选被挂起、**警徽还没吞**。\n"
                       "现在轮到狼队决定：**要不要再来一次自爆**？\n"
                       "· 双爆（第二只狼也自爆）→ **警徽被吞**，本局没有警长，今天也就此结束；\n"
                       "· 不爆 → 竞选恢复（第一天已发过言的人不再重复），之后照常投票定警徽。\n"
                       "只算一次决策，别为这轮多花调用。"),
                 schema='{"explode": true/false, "reason": "<一句理由>"}',
-                legal=ids, required=("explode",))
+                legal=ids, required=("explode",), extra={"double_explode": True})
             return wolf, await self.act(wolf, task)
 
         gathered = await asyncio.gather(*(one(w) for w in wolves), return_exceptions=True)
@@ -2927,7 +2929,11 @@ class Game:
             if truthy(reply.get("explode"), default=False):
                 yes.append(wolf.id)
         lines = "，".join(f"{i}号" for i in ids)
-        if answered == 0 or len(yes) * 2 <= max(1, answered):
+        if answered == 0:
+            self.ledger.add(day, "day", "announce",
+                            "双爆轮没能拿到狼队的回答（调用失败），按「不继续自爆」处理 → 警长竞选恢复。")
+            return False
+        if len(yes) * 2 <= max(1, answered):
             self.ledger.add(day, "day", "announce",
                             f"昨天有人自爆后，狼队没有继续自爆（{lines} 都选择不爆）→ 警长竞选恢复。")
             return False
@@ -2993,7 +2999,8 @@ class Game:
                         + ("；已发过言的不再重复。" if spoken else "。"))
         self._election_open = True
         try:
-            exploded = await self._election_speeches(day, front, back, cands, spoken=spoken)
+            exploded = await self._election_speeches(day, front, back, cands, spoken=spoken,
+                                                     double_explode=True)
             if exploded is not None:
                 return True
             if len(cands) >= len(self.alive_ids()):
@@ -3063,7 +3070,8 @@ class Game:
 
     async def _election_speeches(self, day: int, front: list[int], back: list[int],
                                  candidates: list[int],
-                                 spoken: list[int] | None = None) -> int | None:
+                                 spoken: list[int] | None = None,
+                                 double_explode: bool = False) -> int | None:
         """竞选发言（前置位先、后置位后）。返回自爆的座位号；没爆返回 None。
 
         2026-11-03：抽出来给"双爆挂起后恢复竞选"复用。`spoken` 是**已经发过言**的人
@@ -3103,6 +3111,13 @@ class Game:
             )
             reply = await self.act(seat, task)
             if is_wolf and truthy(reply.get("explode"), default=False):
+                # 恢复竞选期间再爆 = **第二只狼** → 双爆吞警徽（2026-11-03 审查 P1）
+                if double_explode:
+                    await self._apply_explosion(seat.id, day, badge_lost=True,
+                                                take=reply.get("take"))
+                    self.ledger.add(day, "day", "announce",
+                                    "**双狼自爆**：警徽被吞，本局不再有警长；今天到此为止。")
+                    return seat.id
                 suspended = bool(self._king_rule() and self._election_open)
                 await self._apply_explosion(seat.id, day,
                                             badge_lost=(self._election_open and not suspended),
@@ -3113,7 +3128,7 @@ class Game:
                                            "spoken": list(done)}
                 return seat.id
             speech = str(reply.get("speech") or "").strip() or "（我没什么要说的，大家随便投。）"
-            self.ledger.add(day, "day", "speech", f"【竞选】{speech}", seat=seat.id)
+            self.ledger.add(day, "day", "speech", f"【竞选】{clip_speech(speech)}", seat=seat.id)
             claim = str(reply.get("claim") or "").strip()
             if claim and claim not in ("无", "none", "None", "-", "null"):
                 self.ledger.add(day, "day", "claim",
@@ -3240,7 +3255,7 @@ class Game:
             )
             reply = await self.act(seat, task)
             speech = str(reply.get("speech") or "").strip() or "（PK 轮我没什么要补的。）"
-            self.ledger.add(self.day, "day", "speech", f"【竞选PK】{speech}", seat=seat.id)
+            self.ledger.add(self.day, "day", "speech", f"【竞选PK】{clip_speech(speech)}", seat=seat.id)
             claim = str(reply.get("claim") or "").strip()
             if claim and claim not in ("无", "none", "None", "-", "null"):
                 self.ledger.add(self.day, "day", "claim",

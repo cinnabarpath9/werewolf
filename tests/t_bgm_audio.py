@@ -88,7 +88,14 @@ check("1f 旧的合成曲已移除（避免两首并存）",
 
 print("\n=== 二、时长 / 体积 / 格式（作者口径：≤10 分钟、≤10MB、音质尽量好） ===")
 if os.path.isfile(AUDIO):
-    dur, sr, ch, kbps = mp3_info(AUDIO)
+    try:
+        dur, sr, ch, kbps = mp3_info(AUDIO)
+    except ValueError as exc:
+        # 坏文件/改名假文件：走 FAIL，而不是让整个脚本 traceback 崩掉（审查 P2）
+        check("2* 能解析出合法 MP3 帧", False, str(exc))
+        dur, sr, ch, kbps = 0, 0, 0, 0
+    else:
+        check("2* 能解析出合法 MP3 帧", True)
     size_mb = os.path.getsize(AUDIO) / 1024 / 1024
     check("2a 时长 ≤600 秒（十分钟以内）", dur <= 600, f"{dur:.1f}s")
     check("2b 体积 ≤10MB", size_mb <= 10, f"{size_mb:.2f}MB")

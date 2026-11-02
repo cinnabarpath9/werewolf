@@ -58,6 +58,9 @@ print("\n=== 二、胜负与分布 ===")
 check("2a 胜负在载荷里", p["winner"] == "good", p["winner"])
 check("2b 天数在载荷里", p["day"] == 3, str(p["day"]))
 check("2c 板子在载荷里", p["board"] == "six_all_reveal", p["board"])
+check("2c2 死因文案由引擎给（前端不再自己维护一份表）",
+      [r for r in p["seats"] if r["seat"] == 2][0]["death_text"] == "白天被投票放逐",
+      str([r for r in p["seats"] if r["seat"] == 2][0]))
 check("2d 分布计数：狼 2 / 神 2 / 民 2",
       p["counts"] == {"wolf": 2, "god": 2, "villager": 2}, str(p["counts"]))
 
