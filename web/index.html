@@ -733,6 +733,7 @@
       </button>
     </div>
     <button class="home-text-link" id="btnRoom" type="button">联机房间 · 和朋友一起玩</button>
+    <button class="home-text-link" id="btnReviewHome" type="button">复盘 · 看历史对局</button>
 
     <div class="home-status" id="homeStatus"><span>正在读取服务端状态…</span></div>
     <div class="home-result" id="homeResult" hidden></div>
@@ -1368,6 +1369,7 @@ function renderHome() {
     ? (running ? '返回对局' : '进入房间')
     : (running ? '返回对局' : '开始游戏');
   $('btnRoom').hidden = MP.guest;
+  $('btnReviewHome').hidden = MP.guest;
   $('btnSettings').hidden = MP.guest || !!(S.status && S.status.demo);
   $('btnPlay').classList.toggle('primary', true);
   $('btnSettings').classList.toggle('ghost', true);
@@ -2430,6 +2432,7 @@ $('btnPlay').onclick = () => {
   openPicker();
 };
 $('btnRoom').onclick = openRoom;
+$('btnReviewHome').onclick = openReviewList;
 $('btnSettings').onclick = () => openSettings('models');
 $('btnSettingsBack').onclick = () => showScreen('home');
 $('btnPickerBack').onclick = () => showScreen('home');
@@ -4630,6 +4633,64 @@ function callLine(r, humanSeat, total) {
     + `role="button" tabindex="0" title="点开看这一条的完整思维链">${bits.join(' ')}`
     + `<span class="sum">${escapeHtml(replySummaryOf(r))}</span></div>`
     + `<div class="rvdetail" data-detail hidden></div></div>`;
+}
+
+async function openReviewList() {
+  // 2026-11-03（作者要求）：大厅加「复盘」——**先列存档，再点进去看**。
+  // 只列 `/api/games` 根目录（服务端本来就只列根目录，演练局在 games/_mock/，
+  // 所以列表里天然没有演练局）。
+  let list = null;
+  try {
+    const res = await fetch('/api/games' + tokenQS(), { headers: apiHeaders() });
+    try { list = await res.json(); } catch (e) { list = null; }
+    if (!res.ok) {
+      const why = (list && list.error) || '没拿到原因';
+      const hint = (res.status === 401 || res.status === 403)
+        ? '（点「设置」把 werewolf\\配对码.txt 里的码填上再试）' : '';
+      toast(`看不了存档（HTTP ${res.status}）：${why}${hint}`, true);
+      return;
+    }
+  } catch (err) {
+    toast('看不了存档：网络不通（' + (err.message || err) + '）', true);
+    return;
+  }
+  if (!list) { toast('存档列表读不出来（服务端返回的不是 JSON）', true); return; }
+  // 只认真局文件名（game-YYYYMMDD-HHMMSS.json）；目录里别的 json（备份之类）不进列表
+  const names = (list.games || []).filter(n => /^game-\d{8}-\d{6}\.json$/.test(n));
+  document.querySelectorAll('[data-panel="reviewList"]').forEach(el => el.remove());
+  const box = document.createElement('div');
+  box.className = 'toast';
+  box.style.bottom = 'auto'; box.style.top = '70px'; box.style.maxHeight = '70vh';
+  box.style.overflow = 'auto'; box.style.width = '92vw'; box.style.maxWidth = '520px';
+  box.dataset.panel = 'reviewList';
+  const head = document.createElement('div');
+  head.innerHTML = '<b>复盘 · 历史对局</b>'
+    + '<div style="color:var(--dim);font-size:12px;margin:4px 0 8px">'
+    + (names.length ? '只列真实模型对局（演练局不在这里）；点一条看这一局的信息与逐次调用。'
+                    : '还没有真实对局存档（演练局不会进这个列表）。') + '</div>';
+  box.appendChild(head);
+
+  for (const name of names.slice().reverse()) {     // 新的在上
+    // 文件名 → 可读时间：game-20261103-002357.json → 2026-11-03 00:23
+    const m = name.match(/^game-(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})\.json$/);
+    const label = m ? `${m[1]}-${m[2]}-${m[3]} ${m[4]}:${m[5]}` : name.replace(/\.json$/, '');
+    const b = document.createElement('button');
+    b.className = 'home-text-link';
+    b.type = 'button';
+    b.style.display = 'block';
+    b.style.width = '100%';
+    b.style.textAlign = 'left';
+    b.style.padding = '7px 2px';
+    b.textContent = '🕮 ' + label;
+    b.onclick = () => { box.remove(); openReview(name); };
+    box.appendChild(b);
+  }
+  const close = document.createElement('button');
+  close.className = 'ghost'; close.type = 'button'; close.textContent = '关闭';
+  close.style.marginTop = '8px';
+  close.onclick = () => box.remove();
+  box.appendChild(close);
+  document.body.appendChild(box);
 }
 
 async function openReview(want) {
