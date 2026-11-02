@@ -1005,6 +1005,29 @@
           <div class="msg" id="butlerMsg"></div>
         </div>
 
+        <div class="card" id="bgmCard">
+          <div class="card-head">
+            <b>背景音乐</b>
+            <span class="sub">默认打开 · 轻音乐 · 循环播放</span>
+          </div>
+          <label class="field" style="display:flex;align-items:center;gap:10px">
+            <input type="checkbox" id="bgmToggle" style="width:auto">
+            <span>播放背景音乐（关闭后整局静音）</span>
+          </label>
+          <label class="field">
+            <span>音量</span>
+            <input type="range" id="bgmVolume" min="0" max="100" step="1" value="35">
+          </label>
+          <div class="field">
+            <span>导入自己的音乐（mp3 / wav / ogg，只存在你本机浏览器里）</span>
+            <input type="file" id="bgmImport" accept="audio/*">
+          </div>
+          <div class="form-actions">
+            <button class="ghost" id="bgmReset" type="button">恢复默认音乐</button>
+          </div>
+          <div class="msg" id="bgmMsg"></div>
+        </div>
+
         <div class="card" id="statsCard">
           <div class="card-head">
             <b>对局统计</b>
@@ -2162,6 +2185,136 @@ function renderSiteLinks() {
   }
   $('homeLinks').innerHTML = out.join('');
 }
+
+/* ---------------- 背景音乐（2026-11-03） ----------------
+   默认打开；可关；可导入自己的音乐（IndexedDB 只存本机）。
+   浏览器的自动播放策略：没用户手势时 play() 会被拒 —— 这里挂一次性手势监听，
+   用户第一次点页面就接上，不用他去设置里再点一次。 */
+const BGM = (() => {
+  const KEY_ON = 'wolf.bgm.enabled';
+  const KEY_VOL = 'wolf.bgm.volume';
+  const DB = 'wolf-bgm', STORE = 'files', CUSTOM = 'custom';
+  const audio = new Audio();
+  audio.loop = true;
+  audio.preload = 'auto';
+  let customUrl = '';
+  let armed = false;
+
+  const ls = (k, d) => { try { const v = localStorage.getItem(k); return v === null ? d : v; } catch (e) { return d; } };
+  const save = (k, v) => { try { localStorage.setItem(k, v); } catch (e) {} };
+
+  function enabled() { return ls(KEY_ON, '1') === '1'; }
+  function volume() { const v = Number(ls(KEY_VOL, '35')); return isNaN(v) ? 0.35 : Math.min(1, Math.max(0, v / 100)); }
+  function defaultSrc() { return 'audio/bgm.wav'; }
+
+  function openDB() {
+    return new Promise((res, rej) => {
+      const rq = indexedDB.open(DB, 1);
+      rq.onupgradeneeded = () => { if (!rq.result.objectStoreNames.contains(STORE)) rq.result.createObjectStore(STORE); };
+      rq.onsuccess = () => res(rq.result);
+      rq.onerror = () => rej(rq.error);
+    });
+  }
+  async function getCustom() {
+    const db = await openDB();
+    return await new Promise((res, rej) => {
+      const rq = db.transaction(STORE, 'readonly').objectStore(STORE).get(CUSTOM);
+      rq.onsuccess = () => res(rq.result || null);
+      rq.onerror = () => rej(rq.error);
+    });
+  }
+  async function putCustom(blob) {
+    const db = await openDB();
+    await new Promise((res, rej) => {
+      const tx = db.transaction(STORE, 'readwrite');
+      tx.objectStore(STORE).put(blob, CUSTOM);
+      tx.oncomplete = res; tx.onerror = () => rej(tx.error);
+    });
+  }
+  async function delCustom() {
+    const db = await openDB();
+    await new Promise((res, rej) => {
+      const tx = db.transaction(STORE, 'readwrite');
+      tx.objectStore(STORE).delete(CUSTOM);
+      tx.oncomplete = res; tx.onerror = () => rej(tx.error);
+    });
+  }
+
+  function applyVolume() { audio.volume = volume(); }
+
+  async function loadTrack() {
+    try {
+      const blob = await getCustom();
+      if (customUrl) { URL.revokeObjectURL(customUrl); customUrl = ''; }
+      if (blob) { customUrl = URL.createObjectURL(blob); audio.src = customUrl; }
+      else { audio.src = defaultSrc(); }
+    } catch (e) { audio.src = defaultSrc(); }
+  }
+
+  function armGesture() {
+    if (armed) return;
+    armed = true;
+    const kick = () => {
+      document.removeEventListener('pointerdown', kick, true);
+      document.removeEventListener('keydown', kick, true);
+      if (enabled()) audio.play().catch(() => {});
+    };
+    document.addEventListener('pointerdown', kick, true);
+    document.addEventListener('keydown', kick, true);
+  }
+
+  async function start() {
+    applyVolume();
+    if (!enabled()) { audio.pause(); return; }
+    if (!audio.src) await loadTrack();
+    try { await audio.play(); armed = false; }
+    catch (e) { armGesture(); }              // 被自动播放策略拦了：等用户第一次手势
+  }
+
+  async function setEnabled(on) {
+    save(KEY_ON, on ? '1' : '0');
+    if (on) await start(); else audio.pause();
+  }
+  async function setVolume(pct) { save(KEY_VOL, String(pct)); applyVolume(); }
+
+  async function importFile(file) {
+    if (!file) return '';
+    if (!/^audio\//.test(file.type)) return '这个文件不是音频（要 mp3 / wav / ogg）';
+    if (file.size > 40 * 1024 * 1024) return '文件太大了（上限 40MB）';
+    await putCustom(file);
+    await loadTrack();
+    if (enabled()) audio.play().catch(() => armGesture());
+    return '';
+  }
+
+  async function reset() {
+    await delCustom();
+    await loadTrack();
+    if (enabled()) audio.play().catch(() => armGesture());
+    return '';
+  }
+
+  function bindUI() {
+    const tg = $('bgmToggle'), vol = $('bgmVolume'), imp = $('bgmImport'), rs = $('bgmReset'), msg = $('bgmMsg');
+    if (!tg) return;
+    tg.checked = enabled();
+    vol.value = String(Math.round(volume() * 100));
+    tg.onchange = () => { setEnabled(tg.checked); if (msg) msg.textContent = tg.checked ? '已打开' : '已关闭'; };
+    vol.oninput = () => { setVolume(Number(vol.value)); };
+    imp.onchange = async () => {
+      const file = imp.files && imp.files[0];
+      const err = await importFile(file);
+      if (msg) { msg.className = 'msg' + (err ? ' bad' : ''); msg.textContent = err || ('已导入：' + (file ? file.name : '')); }
+      imp.value = '';
+    };
+    rs.onclick = async () => {
+      await reset();
+      if (msg) { msg.className = 'msg'; msg.textContent = '已恢复默认音乐'; }
+    };
+  }
+
+  return { start, bindUI, setEnabled, setVolume };
+})();
 
 /* ---------------- 赞助与反馈页 ---------------- */
 function renderSupport() {
@@ -5568,6 +5721,8 @@ try {
 if (MP.fromLink) showJoin(MP.fromLink, '');
 else if (MP.guest) showScreen('room');
 else showScreen('home');          // 第一屏：大厅（对局在跑时，第一条 status 会切回对局）
+BGM.bindUI();
+BGM.start();
 loadSite();                       // 右下角开源 / Q 群链接（web/site.json，留空就不显示）
 if (!MP.guest) loadSettingsQuiet();  // 让大厅知道「有没有可用的 API」（访客没有管理权限）
 connect();

@@ -2570,6 +2570,20 @@ _PWA_FILES = {
 }
 
 
+@app.get("/audio/{name}")
+async def audio_file(name: str):
+    """默认背景音乐（2026-11-03）。只允许 web/audio/ 下的 mp3/wav/ogg，别的一律 404。
+
+    用户"导入自己的音乐"是**纯前端**的事（File API + IndexedDB），不占服务器存储。
+    """
+    if not re.fullmatch(r"[A-Za-z0-9_-]+\.(mp3|wav|ogg)", name or ""):
+        return JSONResponse({"error": "not found"}, status_code=404)
+    path = os.path.join(WEB_DIR, "audio", name)
+    if not os.path.isfile(path):
+        return JSONResponse({"error": "not found"}, status_code=404)
+    return FileResponse(path, headers={"Cache-Control": "public, max-age=86400"})
+
+
 @app.get("/manifest.webmanifest")
 async def pwa_manifest():
     return FileResponse(os.path.join(WEB_DIR, "manifest.webmanifest"),
