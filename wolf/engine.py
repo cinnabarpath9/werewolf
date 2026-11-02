@@ -29,6 +29,24 @@ from .roles import (ROLES, WOLF as WOLF_CAMP, BoardDef, make_board, role_name,
 #: 死因只在私有视角里出现，公开记录里**不写**（标准规则：夜里死亡不公布死因，让场上好人自己猜）。
 #: ⚠️ 唯一的例外是**白天**那一枪：按用户定的规则，白天被猎人打死的人死因公示为"被子弹打死"，
 #: 这条由 hunter_shoot(daytime=True) 自己写在公告里，不走这张表。
+#: 发言上限（2026-11-03）：提示词让模型写 350 字，但**硬上限**放宽到 800，
+#: 并且从**句末**截断 —— 以前 `[:600]` 会从半句中间切，模型写超时用户看到的是断句。
+SPEECH_LIMIT = 800
+
+
+def clip_speech(text: str, limit: int = SPEECH_LIMIT) -> str:
+    """超长发言按"最后一个句号"截断，补一个省略号；没句号就硬截。"""
+    s = str(text or "")
+    if len(s) <= limit:
+        return s
+    head = s[:limit]
+    for sep in ("\n", "。", "！", "？", "；", ".", "!", "?"):
+        idx = head.rfind(sep)
+        if idx >= limit // 2:                 # 至少保住一半内容，别切得只剩一句
+            return head[:idx + len(sep)] + "……"
+    return head + "……"
+
+
 CAUSE_TEXT = {
     "wolf": "夜里被狼人杀害",
     "poison": "夜里被女巫毒死",
@@ -639,11 +657,14 @@ class Game:
                 "raw": meta.get("raw", ""),
                 "reasoning": meta.get("reasoning", ""),      # 思考链（模型有返回才存）
                 "thinking": meta.get("thinking", {}),        # 这次用的思考档位
+                # 人类座位被"托管"代打时，记一笔 —— 复盘/对局统计里能看出来这不是真人写的
+                "butler": bool(meta.get("butler")),
                 "prompt_tokens": meta.get("prompt_tokens", 0),
                 "completion_tokens": meta.get("completion_tokens", 0),
                 # 命中平台侧缓存的输入 token（平台没返回就是 0）—— 用来回答"前缀缓存到底省没省"
                 "cached_tokens": meta.get("cached_tokens", 0),
-                "elapsed": round(time.time() - started, 2),
+                # 有 meta.elapsed（模型/托管给了真实调用耗时）就用它；没有才用"这一手的总耗时"
+                "elapsed": round(float(meta.get("elapsed") or (time.time() - started)), 2),
                 "error": got.get("_error", ""),
             }
             if _stale():
@@ -1759,7 +1780,7 @@ class Game:
             "vote": self.coerce_seat(reply.get("vote"), self.alive_ids(), default=None),
             "reason": str(reply.get("reason") or "").strip()[:200],
             # 说出口的正文也在这份回复里（决策与发言合并成一次调用，见 decide_for_speech）
-            "speech": str(reply.get("speech") or "").strip()[:600],
+            "speech": clip_speech(str(reply.get("speech") or "").strip()),
             # 狼的"要不要自爆"也在同一次调用里（字段排在最前；好人没有这个字段 → 恒为 False）
             "explode": truthy(reply.get("explode"), default=False),
             # 狼王自爆时**当场带走谁**（同一个字段也在同一次调用里，见 KING_TAKE_HINT 的说明）；
@@ -2082,7 +2103,7 @@ class Game:
                     await self._apply_explosion(seat.id, day, badge_lost=self._election_open,
                                                 take=plan.get("take"))
                     return
-            speech = str(plan.get("speech") or "").strip()
+            speech = clip_speech(str(plan.get("speech") or "").strip())
             claim = str(plan.get("claim") or "").strip()
             got = plan                      # 发言正文与声称身份的来源（决策那次 or 补问那次）
             if not speech:
@@ -2097,7 +2118,7 @@ class Game:
                     required=("speech",),
                 ))
                 got = reply
-                speech = str(reply.get("speech") or "").strip()
+                speech = clip_speech(str(reply.get("speech") or "").strip())
                 claim = str(reply.get("claim") or "").strip()
             speech = speech or "（我过，先听后面的。）"
             # ⚠️ `data={"round": "day"}` 是**白天轮次发言**的标记，必须打：

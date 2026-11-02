@@ -565,8 +565,15 @@ class WebHumanAgent(BaseAgent):
     def __init__(self, seat_id: int, room) -> None:
         self.seat_id = seat_id
         self.room = room
+        #: 2026-11-03：托管替玩家出手时，server 会把那次调用的用量写在这里，
+        #: engine 的 transcript 就能记下"模型/耗时/token"，不再是一行空记录。
+        self._last_meta: dict = {}
+
+    def last_meta(self) -> dict:
+        return dict(self._last_meta or {})
 
     async def ask(self, packet: str, task: Task) -> dict:
+        self._last_meta = {}          # 每一手开始先清空，免得上一手的托管用量串过来
         room = self.room
         # 2026-10-31 联机：一个房间里可能同时有多个真人（投票/狼队决策是 gather 并发问的）。
         # 所以「提问」必须按座位分别建 future，不能再共用一个 `room.awaiting`。

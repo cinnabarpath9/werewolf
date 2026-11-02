@@ -1150,10 +1150,17 @@ class Room:
                     legal=list(pending.get("legal") or []),
                     extra=dict(pending.get("extra") or {}),
                     required=tuple(pending.get("required") or ()))
-        # 2026-11-03：人类面板的 packet 比 AI 座位少一截脚手架 —— 托管容易一句话交差。
-        # 这里明确补一段要求（只对发言类），存档里 24 字 vs 243 字就是这么来的。
+        # 2026-11-03（作者要求）：托管发言**复用真实模型座位那一套上下文** ——
+        # 用 context.build() 重新拼 packet（规则书/打法书/概念库/台账齐全），
+        # 任务说明也按 speech_plan 口径，而不是人类面板那句短提示。
         from wolf import butler as butler_mod                     # noqa: PLC0415
-        packet = butler_mod.augment_packet(pending.get("packet") or "", kind)
+        seat_obj = self.game.seat_by_id(seat) if self.game else None
+        if kind == "speech" and seat_obj is not None and self.game is not None:
+            task, packet = butler_mod.build_speech_call(self.game, seat_obj,
+                                                        int(self.game.day or 1))
+            kind = task.kind
+        else:
+            packet = butler_mod.augment_packet(pending.get("packet") or "", kind)
         agent = LLMAgent(client, seat)
         try:
             action = await asyncio.wait_for(agent.ask(packet, task), timeout=180)
@@ -1175,6 +1182,18 @@ class Room:
         if future is None or future.done():
             self.send_to(ws, {"type": "notice", "text": "🤖 这一手已经答过了。"})
             return
+        # 2026-11-03：把这次托管调用的用量交给"人类代理"，让引擎记进 transcript
+        # （以前这手在存档里是 model='' / tokens=0，看不出托管花了多少）。
+        try:
+            meta = agent.last_meta() or {}
+            meta = dict(meta)
+            meta["butler"] = True
+            seat_obj = self.game.seat_by_id(seat) if self.game else None
+            human_agent = getattr(seat_obj, "agent", None) if seat_obj else None
+            if human_agent is not None:
+                human_agent._last_meta = meta
+        except Exception:                                  # noqa: BLE001
+            pass
         self.pending_asks.pop(seat, None)
         if self.pending_ask is current:
             self.pending_ask = next(iter(self.pending_asks.values()), None)
