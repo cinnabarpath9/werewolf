@@ -179,8 +179,16 @@ function bootProgress(stage) {
   bootT0 = Date.now();
   bootTimer = setInterval(() => {
     const s = Math.round((Date.now() - bootT0) / 1000);
-    $('state').textContent = `${stage}：已等待 ${s} 秒（首次要下 13MB，慢一点正常；之后走缓存）`;
-    if (s === 40) log('还没好？可能是网络慢。这个页面只在下一次打开时会走缓存，第一次必须下完。');
+    if (s < 15) {
+      $('state').textContent = `${stage}：已等待 ${s} 秒（首次要下 13MB，慢一点正常；之后走缓存）`;
+      return;
+    }
+    // 2026-11-03（用户要求）：**15 秒还没下好就给建议** —— 国内直连 GitHub Pages 常被限速。
+    $('state').innerHTML = `${stage}：已等待 ${s} 秒 —— ` +
+      '<b class="bad">如果一直卡住：请开「全局代理 / VPN（魔法网络）」后刷新本页</b>' +
+      '；国内直连 GitHub Pages 经常被限速，开代理后会明显变快（第二次打开走缓存，不用再下）。';
+    if (s === 30) log('30 秒还没好：建议开全局代理/VPN 后刷新；或改用国内静态托管的镜像链接。');
+    if (s === 60) log('60 秒还没好：基本可以确定被限速/打断了 —— 开代理刷新，或换网络。');
   }, 1000);
 }
 function bootDone(text) { if (bootTimer) { clearInterval(bootTimer); bootTimer = 0; } $('state').textContent = text; }
