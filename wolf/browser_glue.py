@@ -187,7 +187,6 @@ async def run_game(board: str, human_seat: int, base_url: str, model: str,
     try:
         playbook = tabletalk.load_playbook(root)
         meta = tabletalk.load_meta_book(root, "")
-        prompt = tabletalk.player_prompt({}, root)
         if not playbook:
             raise RuntimeError("playbook 是空的（content/05_战术书.md 没读到？）")
     except Exception as exc:                            # noqa: BLE001
@@ -200,6 +199,12 @@ async def run_game(board: str, human_seat: int, base_url: str, model: str,
                 ensure_ascii=False))
         except Exception:                               # noqa: BLE001
             pass
+
+    # player_prompt 依赖完整 config（浏览器里没有），单独兜：失败只丢"说话风格提示"，不算加载失败
+    try:
+        prompt = tabletalk.player_prompt({}, root)
+    except Exception:                                   # noqa: BLE001
+        prompt = ""
 
     board_def = make_board(board)
     game = Game(board=board_def, human_seat=int(human_seat) or 0,

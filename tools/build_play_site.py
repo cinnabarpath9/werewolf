@@ -58,8 +58,8 @@ def main() -> int:
 
     total = sum(os.path.getsize(os.path.join(base, f))
                 for base, _d, files in os.walk(OUT) for f in files)
-    print(f"✅ dist-play/ 已生成（{total / 1024 / 1024:.1f} MB）")
-    print(f"✅ zip: {ZIP}（{os.path.getsize(ZIP) / 1024 / 1024:.1f} MB）")
+    print(f"[OK] dist-play/ 已生成（{total / 1024 / 1024:.1f} MB）")
+    print(f"[OK] zip: {ZIP}（{os.path.getsize(ZIP) / 1024 / 1024:.1f} MB）")
     return 0
 
 
