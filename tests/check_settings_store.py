@@ -222,6 +222,19 @@ def main() -> int:
         import shutil
         shutil.rmtree(tmp, ignore_errors=True)
 
+    print("\n=== 八、托管模型设置（2026-11-02）===")
+    s8 = store.normalize({"butler": {"api": "ark_eco", "thinking": "high",
+                                              "temperature": 1.2, "max_tokens": 9000}})
+    check("8a API 名统一大写", s8["butler"].get("api") == "ARK_ECO", str(s8["butler"]))
+    check("8b 思考档被收下", s8["butler"].get("thinking") == "high", str(s8["butler"]))
+    check("8c 温度/上限收下", s8["butler"].get("temperature") == 1.2
+          and s8["butler"].get("max_tokens") == 9000, str(s8["butler"]))
+    s9 = store.normalize({"butler": {"api": "坏名字!", "thinking": "唬人", "temperature": 99}})
+    check("8d 坏 API 名/档位/越界温度一律丢掉（= 没启用 / 跟随默认）", not s9["butler"],
+          str(s9["butler"]))
+    check("8e 没写 butler 时结构里仍有空 dict（页面靠它判空）",
+          store.empty().get("butler") == {}, str(store.empty()))
+
     bad = [x for x in RESULTS if not x[1]]
     print("\n" + "=" * 70)
     print(f"共 {len(RESULTS)} 项：通过 {len(RESULTS) - len(bad)}，失败 {len(bad)}")
