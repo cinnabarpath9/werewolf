@@ -301,30 +301,67 @@ function renderAsk(ask) {
   const legal = (ask.legal || []).filter(x => x);
   const row = document.createElement('div');
   row.className = 'row';
-  if (legal.length) {
-    for (const n of legal) {
-      const b = document.createElement('button');
-      b.textContent = n + '号';
-      b.onclick = () => {
-        const field = FIELD[ask.kind] || 'target';
-        send({ [field]: n });
-      };
-      row.appendChild(b);
-    }
-  }
-  if (!legal.length) {
+  const btn = (text, payload) => {
     const b = document.createElement('button');
-    b.textContent = '确认/过';
-    b.onclick = () => send({});
-    row.appendChild(b);
+    b.textContent = text;
+    b.onclick = () => send(payload);
+    return b;
+  };
+
+  // 投票：只给合法目标 + 弃权
+  if (ask.kind === 'vote' || ask.kind === 'sheriff_vote') {
+    for (const n of legal) row.appendChild(btn(n + '号', { vote: n }));
+    row.appendChild(btn('弃权', { abstain: true, reason: '弃权' }));
+    body.appendChild(row);
+    return;
   }
-  body.appendChild(row);
-  if (ask.kind === 'sheriff_run') {
-    const skip = document.createElement('button');
-    skip.textContent = '不上警';
-    skip.onclick = () => send({ run: false });
-    body.appendChild(skip);
+
+  // 女巫：解药 / 毒药 两组（引擎要 {"save":bool,"poison":n|null,"reason":str}）
+  if (ask.kind === 'witch') {
+    // 引擎给的是 has_heal / has_poison（2026-10-25 口径）；缺省当"有"，别把按钮藏没了
+    const canSave = !(ask.extra && ask.extra.has_heal === false);
+    const canPoison = !(ask.extra && ask.extra.has_poison === false);
+    const reason = document.createElement('input');
+    reason.placeholder = '一句话理由（可空）';
+    if (canSave) {
+      const r1 = document.createElement('div'); r1.className = 'row';
+      r1.appendChild(btn('💉 用解药救人', { save: true, poison: null, reason: reason.value || '救人' }));
+      r1.appendChild(btn('不用解药', { save: false, poison: null, reason: reason.value || '不救' }));
+      body.appendChild(r1);
+    }
+    if (canPoison && legal.length) {
+      const r2 = document.createElement('div'); r2.className = 'row';
+      for (const n of legal) {
+        r2.appendChild(btn('☠ 毒 ' + n + '号', { save: false, poison: n, reason: reason.value || '毒' }));
+      }
+      r2.appendChild(btn('不毒', { save: false, poison: null, reason: '不用毒' }));
+      body.appendChild(r2);
+    }
+    body.appendChild(reason);
+    return;
   }
+
+  // 其余未知类型：给一个 JSON 输入框（题干里已经写了 schema），别瞎猜字段导致死循环
+  const ta = document.createElement('textarea');
+  ta.rows = 3; ta.style.width = '100%';
+  ta.value = '{}';
+  if (ask.schema) ta.placeholder = ask.schema;
+  body.appendChild(ta);
+  const err = document.createElement('div');
+  err.className = 'hint bad';
+  const go = document.createElement('button');
+  go.className = 'primary'; go.textContent = '提交';
+  go.onclick = () => {
+    try {
+      const payload = JSON.parse(ta.value || '{}');
+      send(payload);
+    } catch (e) {
+      err.textContent = '不是合法 JSON：' + e.message;
+    }
+  };
+  body.appendChild(go);
+  body.appendChild(err);
+  return;
 }
 
 $('btnStart').onclick = async () => {

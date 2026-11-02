@@ -171,8 +171,3 @@ async def run_game(board: str, human_seat: int, base_url: str, model: str,
     winner = await game.run()
     on_event("end", winner=winner, day=game.day)
     return winner
-
-
-def token_estimate(text: str) -> int:
-    """粗估 token（页面显示用；不精确，别当账）。"""
-    return max(1, int(len(text) * 0.7))
