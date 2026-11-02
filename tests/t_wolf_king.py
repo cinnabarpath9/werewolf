@@ -211,39 +211,44 @@ check("4a 狼王被毒死也带走了一人（5号预言家）",
 check("4b 那一口是在**判胜负之前**落的（否则「狼王死＝狼队崩」会先结算）",
       any(x[1] == "wolf_king_take" for x in log), str([x[1] for x in log][:12]))
 
-print("\n=== 五、自爆 = 白狼王式：带人并进同一次决策 ===")
+print("\n=== 五、狼王**不能自爆**（作者 2026-11-03 新规，11 人板）===")
+# 旧口径是"狼王自爆=白狼王式、当场带人"；新规则把这条路关了：
+#   狼王拿到"狼王牌"就不再问自爆（少一次调用），就算剧本硬填 explode=true 也不执行。
 king_plan = {"reads": [], "vote": None, "speech": "剧本", "claim": "无",
-             "explode": True, "take": 5, "reason": "剧本：自爆带人"}
+             "explode": True, "take": 5, "reason": "剧本：狼王想自爆"}
 s = dict(BASE)
-s["speech_plan"] = {4: king_plan,                       # ⚠️ 键是**整数座位号**（剧本表按 int 查）
+s["speech_plan"] = {4: king_plan,
                     "*": {"reads": [], "vote": None, "speech": "剧本", "claim": "无"}}
 g, log = build(script=s)
 g.day = 1
 g.phase = "day"
 g.sheriff_enabled = False        # 抽掉警长，让流程直接走到 4 号发言前的决策
 asyncio.run(g.day_phase([]))
-check("5a 狼王自爆当场出局", not g.seat_by_id(4).alive
-      and g.seat_by_id(4).death_cause == "explode",
+check("5a 狼王**没有**出局（自爆被拒）", g.seat_by_id(4).alive is True
+      and g.seat_by_id(4).death_cause is None,
       f"alive={g.seat_by_id(4).alive} cause={g.seat_by_id(4).death_cause}")
-check("5b 自爆同时带走 5 号（白狼王式）", not g.seat_by_id(5).alive,
+check("5b 也没有带走人（自爆这一口不存在了）", g.seat_by_id(5).alive is True,
       f"5号 alive={g.seat_by_id(5).alive} 死因={g.seat_by_id(5).death_cause}")
-check("5c **没有为这一口多花一次调用**（目标来自同一次决策的 take）",
+check("5c 没有任何 wolf_king_take 调用（自爆那条路不走）",
       not [x for x in log if x[1] == "wolf_king_take"])
-check("5d 自爆标记打上了（今天不再发言投票、直接进夜）",
-      g.exploded_today == 4, str(g.exploded_today))
-check("5e 公告写明自爆 + 带走谁",
-      any("自爆" in (e.text or "") for e in g.ledger.entries)
-      and any("带走 5号" in (e.text or "") for e in g.ledger.entries))
+check("5d 自爆标记没打上（今天照常发言投票）", g.exploded_today is None, str(g.exploded_today))
+check("5e 台账里**没有**狼王自爆公告",
+      not any("自爆" in (e.text or "") for e in g.ledger.entries),
+      str([e.text[:40] for e in g.ledger.entries if "自爆" in (e.text or "")][:2]))
 
-print("\n=== 六、团队自爆窗口也带上那一口 ===")
+print("\n=== 六、团队自爆窗口：狼王不参与，爆的是小狼 ===")
 g2, log2 = build(script={**BASE, "wolf_explode": {
     4: {"explode": True, "who": 4, "take": 5, "reason": "剧本"},
     "*": {"explode": True, "who": 4, "take": None, "reason": "剧本"}}})
 g2.day = 1
 exploded = asyncio.run(g2.wolf_explode_round(1, [5, 6]))
-check("6a 团队决策过半 → 狼王爆了", exploded and not g2.seat_by_id(4).alive)
-check("6b 团队决策里的 take 也被用上了（不多花调用）",
-      not g2.seat_by_id(5).alive and not [x for x in log2 if x[1] == "wolf_king_take"],
+check("6a 团队决策仍然可能爆，但**狼王不会被推出去**",
+      exploded and g2.seat_by_id(4).alive is True,
+      f"exploded={exploded} 4号 alive={g2.seat_by_id(4).alive}")
+check("6b 狼王不在自爆候选里（决策名单只有三头小狼）",
+      all(x[0] != 4 for x in log2 if x[1] == "wolf_explode"),
+      str(sorted({x[0] for x in log2 if x[1] == "wolf_explode"})))
+check("6c 狼王的 take 自然也没被用（他没爆）", g2.seat_by_id(5).alive is True,
       f"5号 alive={g2.seat_by_id(5).alive}")
 
 print("\n=== 七、首夜无刀的第一天公告 ===")

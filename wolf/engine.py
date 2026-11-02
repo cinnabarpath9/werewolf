@@ -414,6 +414,10 @@ class Game:
         self._election_open = False
         self.wolf_explode = bool(wolf_explode)
         self.exploded_today: int | None = None
+        #: 2026-11-03（11 人板专属新规）：单狼自爆**不吞警徽**，竞选挂起；
+        #: 第二天白天先问狼队"要不要再来一次"，双爆才吞警徽。
+        #: 结构：{"day": 1, "candidates": [...], "front": [...], "back": [...], "spoken": [...]}
+        self._badge_suspend: dict | None = None
         #: 上游连续失败时的"暂停并问用户"回调：`async (seat, task, error, stalled) -> "retry"|"skip"|"abort"`。
         #: 没传（命令行/mock/工具脚本）时保持老行为：记一笔警告，按规则随机处理，继续打。
         self.on_stall = on_stall
@@ -1599,6 +1603,10 @@ class Game:
         elif seat.role_key == "witch":
             extra = ("你是女巫：额外想清楚**要不要用解药/毒药、毒谁**；如果你已经跳出身份，"
                      "把你对场上的判断和自己的打算说出来（但别把底牌细节说得太满）。")
+        elif role.camp == "wolf" and not self.can_explode(seat):
+            # 11 人板的狼王不能自爆（作者 2026-11-03）：给它一套"普通狼"的打法提示
+            extra = ("你是**狼王**。**本板子狼王不能自爆** —— 这条规则对你关闭。"
+                     "按普通狼的思路想这一轮怎么发言、怎么带票、哪一轮值得用出局带人。")
         elif role.camp == "wolf":
             # ⚠️ 自爆是**这一次决策里最先要回答的一件事**（用户 2026-10-09 定的口径）：
             #    每个角色白天发言前本来就有一次高思考调用，狼就在这次调用里先输出
@@ -1648,11 +1656,10 @@ class Game:
                     # 狼多一个字段、而且排在最前（用户口径：先决定自爆，不自爆再谈怎么打）
                     + ('，另外**第一个字段是** "explode": true/false'
                        '（你是狼：要不要现在就自爆）'
-                       + ('，"take": <你是狼王时：自爆后带走谁；不用就填 null>'
-                          if role.key == "wolf_king" else '') if role.camp == "wolf" else '')),
+                       if self.can_explode(seat) else '')),
             legal=[i for i in others] or None, required=("reads", "vote", "speech"),
             # 狼选了自爆时，缺 reads/vote/speech 不许再罚一次"整份重写"（见 agents.LLMAgent.ask）
-            extra={"explode_exempt": True} if role.camp == "wolf" else None,
+            extra={"explode_exempt": True} if self.can_explode(seat) else None,
         )
         reply = await self.act(seat, task)
         plan = self._digest_plan(reply)
@@ -2023,6 +2030,12 @@ class Game:
         if self.check_win():
             return
 
+        # --- 2.9) 昨天单狼自爆挂起的竞选：今天先问双爆、再恢复竞选 ---
+        if (self._badge_suspend and self.sheriff_enabled and self.sheriff_id is None
+                and int(self._badge_suspend.get("day") or 0) < day):
+            if await self.resume_badge_election(day):
+                return
+
         # --- 3) 第一天：死亡结算完了才竞选警长（所以夜里的死者既不参选也不投票）---
         if self.sheriff_enabled and day == 1 and self.sheriff_id is None:
             self._election_open = True
@@ -2065,7 +2078,7 @@ class Game:
                 # ⚠️ 自爆**不额外占一次调用**（用户 2026-10-09 纠正）：它就是这一次决策里
                 #    最先输出的那个字段（狼的 schema 第一个字段是 explode）。填了 true → 当场爆，
                 #    后面的发言与投票全部跳过，直接进夜（当夜照常刀人）。
-                if seat.camp == WOLF_CAMP and plan.get("explode"):
+                if self.can_explode(seat) and plan.get("explode"):
                     await self._apply_explosion(seat.id, day, badge_lost=self._election_open,
                                                 take=plan.get("take"))
                     return
@@ -2669,10 +2682,10 @@ class Game:
                          "（`explode` 填 true 就直接自爆、不再回答上警的问题；"
                          "填 false 再按上面的三选一答 `run`。）\n"
                          + king_take_hint(seat)
-                         if seat.camp == WOLF_CAMP else "")),
+                         if self.can_explode(seat) else "")),
                 schema=('{"explode": true/false, "run": "front" | "back" | false, '
                         + KING_TAKE_SCHEMA +
-                        '"reason": "<一句话理由>"}' if seat.camp == WOLF_CAMP else
+                        '"reason": "<一句话理由>"}' if self.can_explode(seat) else
                         '{"run": "front" | "back" | false, "reason": "<一句话理由>"}'),
                 legal=[],
             )
@@ -2680,9 +2693,17 @@ class Game:
             # ⚠️ 狼在这一轮里**先决定要不要自爆**（跟"要不要上警"同一次调用，不额外花钱）：
             #    「假设 1 号是狼，到是否上警的决策轮，决策两个问题：先决策要不要自爆？
             #     自爆的话就不用后面决策直接自爆，不自爆再决策前置位还是后置位上警。」
-            if seat.camp == WOLF_CAMP and truthy(reply.get("explode"), default=False):
-                await self._apply_explosion(seat.id, day, badge_lost=self._election_open,
+            if self.can_explode(seat) and truthy(reply.get("explode"), default=False):
+                # 11 人板新规（作者 2026-11-03）：单狼自爆**不吞警徽**，把竞选挂起；
+                # 其他板子照旧（自爆吞警徽）。
+                suspended = bool(self._king_rule() and self._election_open)
+                await self._apply_explosion(seat.id, day,
+                                            badge_lost=(self._election_open and not suspended),
                                             take=reply.get("take"))
+                if suspended:
+                    self._badge_suspend = {"day": day, "candidates": list(candidates),
+                                           "front": list(front), "back": list(back),
+                                           "spoken": []}
                 return
             where = self._run_position(reply.get("run"))
             if where is not None:
@@ -2707,7 +2728,7 @@ class Game:
         #   然后在第一张牌上警发言之前，狼看见都有谁上警之后可以决策一次是否要自爆」。
         # 为什么只在这一点开：让狼能在"任何人的发言回合"自爆 = 一头狼多 11 次调用，太慢太贵；
         #   这里只多一轮"四狼各一次"的决策（`game.wolf_explode: false` 可关）。
-        if await self.wolf_explode_round(day, candidates):
+        if await self.wolf_explode_round(day, candidates, front, back):
             # 自爆吞警徽：竞选直接作废、警徽流失；今天的发言与投票全部跳过，**当夜照常刀人**
             return
 
@@ -2719,85 +2740,16 @@ class Game:
             return
 
         # --- 竞选发言：**前置位先、后置位后**（各自按座位号从小到大）；只有竞选者发言 ---
-        # 用户 2026-10-09 定的顺序：前置位上警的先说（先占位），后置位的听完再总结、拉票、号召投票。
-        for seat_id in sorted(front) + sorted(back):
-            seat = self.seat_by_id(seat_id)
-            if not seat.alive:
-                continue          # 防御：跟 pk_speeches 一样，await 之前重看一眼存活
-            is_wolf = seat.camp == WOLF_CAMP
-            task = Task(
-                kind="sheriff_speech",
-                text=(("你是警长候选人（**前置位**：你是最先说的几个人之一），"
-                       "现在轮到你发表竞选发言（全场都能听到）。")
-                      if seat_id in front else
-                      ("你是警长候选人（**后置位**：前面的人已经说完了），"
-                       "现在轮到你发言 —— 可以总结前面的发言、拉票、号召大家把票投给谁。"))
-                     + "说说你当上警长后会怎么带队、你的判断，或者亮出你的身份。350 字以内。"
-                     + ("\n**你是狼：先回答一件事 —— 这一轮要不要自爆？**"
-                        "（`explode` 填 true 就直接自爆、不再发这段言；填 false 再写 `speech`。）\n"
-                        + king_take_hint(seat)
-                        if is_wolf else ""),
-                schema=('{"explode": true/false, "speech": "<你的竞选发言，350 字以内>", '
-                        + KING_TAKE_SCHEMA +
-                        '"claim": "<你声称的身份，没有就写 无>", "reason": "<你的真实想法>"}'
-                        if is_wolf else
-                        '{"speech": "<你的竞选发言，350 字以内>", '
-                        '"claim": "<你声称的身份，没有就写 无>", "reason": "<你的真实想法>"}'),
-                legal=[i for i in alive_ids if i != seat_id],
-                required=("speech",),
-                extra={"explode_exempt": True} if is_wolf else None,
-            )
-            reply = await self.act(seat, task)
-            # 狼候选人在自己这段竞选发言里也能自爆（同一次调用，不额外花钱）
-            if is_wolf and truthy(reply.get("explode"), default=False):
-                await self._apply_explosion(seat.id, day, badge_lost=self._election_open,
-                                            take=reply.get("take"))
-                return
-            speech = str(reply.get("speech") or "").strip() or "（我没什么要说的，大家随便投。）"
-            self.ledger.add(day, "day", "speech", f"【竞选】{speech}", seat=seat.id)
-            claim = str(reply.get("claim") or "").strip()
-            if claim and claim not in ("无", "none", "None", "-", "null"):
-                self.ledger.add(day, "day", "claim",
-                                f"{seat.id}号 在竞选发言里声称自己是【{claim}】。",
-                                seat=seat.id, data={"claim": claim})
-            if reply.get("reason"):
-                seat.mind = self._append_mind(
-                    seat.mind, f"第 {day} 天竞选警长的真实想法：{str(reply['reason'])[:200]}")
-
-        # --- 投票：只有**非竞选者**能投（竞选者没有投票权）---
-        voters = [s for s in self.alive if s.id not in candidates and not s.revealed_idiot]
-        votes = await self._election_votes(candidates, voters, round_no=1)
-        counts = Counter(t for t in votes.values() if t is not None)
-        if not counts:
-            self._badge_lost("竞选投票没有有效票")
+        exploded = await self._election_speeches(day, front, back, candidates, spoken=[])
+        if exploded is not None:
             return
-        best = max(counts.values())
-        leaders = [k for k, v in counts.items() if v == best]
 
-        # --- 平票 → 平票者各再发一轮言（PK）→ 只在他们之间重投 → **仍平票才流失** ---
-        # （用户规则：竞选凭票，打一轮发言 PK 再平票才流失）
-        if len(leaders) > 1:
-            tied = "、".join(f"{i}号" for i in leaders)
-            self.ledger.add(day, "day", "announce",
-                            f"警长竞选平票（{tied} 各 {best} 票），进入 PK："
-                            f"平票者各再发言一轮，然后只在他们之间重投；再平票才警徽流失。")
-            await self._election_pk_speeches(leaders)
-            second = await self._election_votes(leaders, voters, round_no=2)
-            counts2 = Counter(t for t in second.values() if t is not None)
-            if not counts2:
-                self._badge_lost("竞选 PK 轮没有有效票")
-                return
-            best2 = max(counts2.values())
-            leaders2 = [k for k, v in counts2.items() if v == best2]
-            if len(leaders2) > 1:
-                self._badge_lost("竞选 PK 仍然平票（"
-                                 + "、".join(f"{i}号" for i in leaders2) + "）")
-                return
-            self._elect_sheriff(leaders2[0], note=f"竞选 PK 后得 {best2} 票")
-            return
-        self._elect_sheriff(leaders[0], note=f"竞选投票得 {best} 票")
+        await self._election_vote_and_elect(day, candidates)
 
-    async def wolf_explode_round(self, day: int, candidates: list[int]) -> bool:
+
+    async def wolf_explode_round(self, day: int, candidates: list[int],
+                                 front: list[int] | None = None,
+                                 back: list[int] | None = None) -> bool:
         """狼队自爆决策（用户 2026-10-08 加的变版规则）。返回 True = 真的爆了。
 
         规则口径（照用户原话实现）：
@@ -2813,7 +2765,7 @@ class Game:
         self.exploded_today = None
         if not self.wolf_explode:
             return False
-        wolves = [s for s in self.alive if s.camp == WOLF_CAMP]
+        wolves = [s for s in self.alive if self.can_explode(s)]   # 11 人板：狼王不参与
         if not wolves:
             return False
         wolf_ids = [s.id for s in wolves]
@@ -2869,6 +2821,8 @@ class Game:
         #    它掉出了分母以外的计数（没进 yes），**却是照样被算进分母的** —— 等于静默把
         #    "过半"的门槛抬高了。现在分母只算"真的回了话的狼"（`answered`）。
         base = max(1, answered)
+        # 11 人板新规：自爆只"挂起竞选"，不吞警徽（双爆才吞）
+        suspended = bool(self._king_rule())
         if len(yes) * 2 <= base:                   # 没过半：不爆
             self.ledger.add(day, "day", "private",
                             f"狼队自爆决策：{lines}。没过半 → 不自爆。", visible_to=(WOLF,))
@@ -2886,8 +2840,111 @@ class Game:
             who = min(yes)
         self.ledger.add(day, "day", "private",
                         f"狼队自爆决策：{lines}。过半 → 由 {who}号 自爆。", visible_to=(WOLF,))
-        await self._apply_explosion(who, day, badge_lost=True, take=takes.get(who))
+        await self._apply_explosion(who, day, badge_lost=not suspended, take=takes.get(who))
+        if suspended:
+            self._badge_suspend = {"day": day, "candidates": list(candidates),
+                                   "front": list(front or []), "back": list(back or []),
+                                   "spoken": []}
         return True
+
+    def _king_rule(self) -> bool:
+        """11 人狼王板专属新规（作者 2026-11-03 定）：狼王不能自爆 + 双爆才吞警徽。
+
+        只对 `eleven_wolfking` 生效；其他板子保持原规则（自爆吞警徽、狼王能爆）。
+        """
+        return str(getattr(self.board_def, "name", "")) == "eleven_wolfking"
+
+    def can_explode(self, seat) -> bool:
+        """这个座位能不能自爆：狼；11 人板上的**狼王不能**。"""
+        if seat.camp != WOLF_CAMP:
+            return False
+        return not (self._king_rule() and seat.role_key == "wolf_king")
+
+    async def double_explode_round(self, day: int) -> bool:
+        """第二天白天：剩下的狼决定`要不要再自爆一次`。返回 True = 双爆成立。
+
+        作者 2026-11-03 的口径（11 人板专属）：
+          · 第一只狼自爆后**不吞警徽**，先过夜；第二天公布夜里可公开信息（谁出局/平安夜）；
+          · 然后剩下的狼**各调用一次**决策要不要再爆（狼王不能爆，不参与）；
+          · 过半同意 → **双爆吞警徽**（本局没有警长），当天也到此为止；
+          · 不同意 → **恢复竞选**：已发过言的不重复，然后投票决定警徽。
+        """
+        wolves = [s for s in self.alive if self.can_explode(s)]
+        if not wolves or not self.wolf_explode:
+            return False
+        ids = [s.id for s in wolves]
+
+        async def one(wolf: Seat):
+            task = Task(
+                kind="wolf_explode",
+                text=("第 2 天：昨天已经有一只狼自爆，警长竞选被挂起、**警徽还没吞**。\n"
+                      "现在轮到狼队决定：**要不要再来一次自爆**？\n"
+                      "· 双爆（第二只狼也自爆）→ **警徽被吞**，本局没有警长，今天也就此结束；\n"
+                      "· 不爆 → 竞选恢复（第一天已发过言的人不再重复），之后照常投票定警徽。\n"
+                      "只算一次决策，别为这轮多花调用。"),
+                schema='{"explode": true/false, "reason": "<一句理由>"}',
+                legal=ids, required=("explode",))
+            return wolf, await self.act(wolf, task)
+
+        gathered = await asyncio.gather(*(one(w) for w in wolves), return_exceptions=True)
+        yes: list[int] = []
+        answered = 0
+        for item in gathered:
+            if isinstance(item, BaseException):
+                if isinstance(item, GameAborted):
+                    raise item
+                continue
+            answered += 1
+            wolf, reply = item
+            if truthy(reply.get("explode"), default=False):
+                yes.append(wolf.id)
+        lines = "，".join(f"{i}号" for i in ids)
+        if answered == 0 or len(yes) * 2 <= max(1, answered):
+            self.ledger.add(day, "day", "announce",
+                            f"昨天有人自爆后，狼队没有继续自爆（{lines} 都选择不爆）→ 警长竞选恢复。")
+            return False
+        who = min(yes)
+        await self._apply_explosion(who, day, badge_lost=True)
+        self.ledger.add(day, "day", "announce",
+                        "**双狼自爆**：警徽被吞，本局不再有警长；今天到此为止，天黑后照常行动。")
+        self._badge_suspend = None
+        return True
+
+    async def resume_badge_election(self, day: int) -> bool:
+        """恢复被单狼自爆挂起的警长竞选。返回 True = 当天到此为止（双爆了）。"""
+        state = self._badge_suspend
+        if not state:
+            return False
+        self._badge_suspend = None
+        if await self.double_explode_round(day):
+            return True
+
+        cands = [i for i in (state.get("candidates") or []) if self.seat_by_id(i).alive]
+        front = [i for i in (state.get("front") or []) if i in cands]
+        back = [i for i in (state.get("back") or []) if i in cands]
+        spoken = [i for i in (state.get("spoken") or []) if i in cands]
+        if not cands:
+            self._badge_lost("恢复竞选时已没有候选人")
+            return False
+        self.ledger.add(day, "day", "announce",
+                        f"警长竞选恢复（第 1 天被自爆打断）：候选人 "
+                        + "、".join(f"{i}号" for i in cands)
+                        + ("；已发过言的不再重复。" if spoken else "。"))
+        self._election_open = True
+        try:
+            exploded = await self._election_speeches(day, front, back, cands, spoken=spoken)
+            if exploded is not None:
+                return True
+            if len(cands) >= len(self.alive_ids()):
+                self._badge_lost("全员上警（没人有投票权）")
+                return False
+            if len(cands) == 1:
+                self._elect_sheriff(cands[0], note="只有一人上警，直接当选")
+                return False
+            await self._election_vote_and_elect(day, cands)
+        finally:
+            self._election_open = False
+        return False
 
     async def _apply_explosion(self, who: int, day: int, badge_lost: bool,
                                take: int | None = None) -> None:
@@ -2926,6 +2983,105 @@ class Game:
         if int(self.sheriff_id or 0) == victim.id:
             await self.handle_sheriff_death(victim)
         self.check_win()
+
+    async def _election_speeches(self, day: int, front: list[int], back: list[int],
+                                 candidates: list[int],
+                                 spoken: list[int] | None = None) -> int | None:
+        """竞选发言（前置位先、后置位后）。返回自爆的座位号；没爆返回 None。
+
+        2026-11-03：抽出来给"双爆挂起后恢复竞选"复用。`spoken` 是**已经发过言**的人
+        （作者口径：第一天已发过的，恢复时不再重复）。狼在这里第一次自爆时，
+        11 人板把竞选挂起而不是吞警徽 —— 由调用方（sheriff_election / resume）决定。
+        """
+        already = set(spoken or [])
+        done = list(already)
+        for seat_id in sorted(front) + sorted(back):
+            if seat_id in already:
+                continue
+            seat = self.seat_by_id(seat_id)
+            if not seat.alive:
+                continue
+            is_wolf = self.can_explode(seat)
+            task = Task(
+                kind="sheriff_speech",
+                text=(("你是警长候选人（**前置位**：你是最先说的几个人之一），"
+                       "现在轮到你发表竞选发言（全场都能听到）。")
+                      if seat_id in front else
+                      ("你是警长候选人（**后置位**：前面的人已经说完了），"
+                       "现在轮到你发言 —— 可以总结前面的发言、拉票、号召大家把票投给谁。"))
+                     + "说说你当上警长后会怎么带队、你的判断，或者亮出你的身份。350 字以内。"
+                     + ("\n**你是狼：先回答一件事 —— 这一轮要不要自爆？**"
+                        "（`explode` 填 true 就直接自爆、不再发这段言；填 false 再写 `speech`。）\n"
+                        + king_take_hint(seat)
+                        if is_wolf else ""),
+                schema=('{"explode": true/false, "speech": "<你的竞选发言，350 字以内>", '
+                        + KING_TAKE_SCHEMA +
+                        '"claim": "<你声称的身份，没有就写 无>", "reason": "<你的真实想法>"}'
+                        if is_wolf else
+                        '{"speech": "<你的竞选发言，350 字以内>", '
+                        '"claim": "<你声称的身份，没有就写 无>", "reason": "<你的真实想法>"}'),
+                legal=[i for i in self.alive_ids() if i != seat_id],
+                required=("speech",),
+                extra={"explode_exempt": True} if is_wolf else None,
+            )
+            reply = await self.act(seat, task)
+            if is_wolf and truthy(reply.get("explode"), default=False):
+                suspended = bool(self._king_rule() and self._election_open)
+                await self._apply_explosion(seat.id, day,
+                                            badge_lost=(self._election_open and not suspended),
+                                            take=reply.get("take"))
+                if suspended:
+                    self._badge_suspend = {"day": day, "candidates": list(candidates),
+                                           "front": list(front), "back": list(back),
+                                           "spoken": list(done)}
+                return seat.id
+            speech = str(reply.get("speech") or "").strip() or "（我没什么要说的，大家随便投。）"
+            self.ledger.add(day, "day", "speech", f"【竞选】{speech}", seat=seat.id)
+            claim = str(reply.get("claim") or "").strip()
+            if claim and claim not in ("无", "none", "None", "-", "null"):
+                self.ledger.add(day, "day", "claim",
+                                f"{seat.id}号 在竞选发言里声称自己是【{claim}】。",
+                                seat=seat.id, data={"claim": claim})
+            if reply.get("reason"):
+                seat.mind = self._append_mind(
+                    seat.mind, f"第 {day} 天竞选警长的真实想法：{str(reply['reason'])[:200]}")
+            done.append(seat_id)
+        return None
+
+
+    async def _election_vote_and_elect(self, day: int, candidates: list[int]) -> None:
+        """竞选投票 + 平票 PK + 选出警长（原 `sheriff_election` 的后半段，抽出来复用）。"""
+        voters = [s for s in self.alive if s.id not in candidates and not s.revealed_idiot]
+        votes = await self._election_votes(candidates, voters, round_no=1)
+        counts = Counter(t for t in votes.values() if t is not None)
+        if not counts:
+            self._badge_lost("竞选投票没有有效票")
+            return
+        best = max(counts.values())
+        leaders = [k for k, v in counts.items() if v == best]
+
+        # --- 平票 → 平票者各再发一轮言（PK）→ 只在他们之间重投 → **仍平票才流失** ---
+        # （用户规则：竞选凭票，打一轮发言 PK 再平票才流失）
+        if len(leaders) > 1:
+            tied = "、".join(f"{i}号" for i in leaders)
+            self.ledger.add(day, "day", "announce",
+                            f"警长竞选平票（{tied} 各 {best} 票），进入 PK："
+                            f"平票者各再发言一轮，然后只在他们之间重投；再平票才警徽流失。")
+            await self._election_pk_speeches(leaders)
+            second = await self._election_votes(leaders, voters, round_no=2)
+            counts2 = Counter(t for t in second.values() if t is not None)
+            if not counts2:
+                self._badge_lost("竞选 PK 轮没有有效票")
+                return
+            best2 = max(counts2.values())
+            leaders2 = [k for k, v in counts2.items() if v == best2]
+            if len(leaders2) > 1:
+                self._badge_lost("竞选 PK 仍然平票（"
+                                 + "、".join(f"{i}号" for i in leaders2) + "）")
+                return
+            self._elect_sheriff(leaders2[0], note=f"竞选 PK 后得 {best2} 票")
+            return
+        self._elect_sheriff(leaders[0], note=f"竞选投票得 {best} 票")
 
     async def _election_votes(self, candidates: list[int], voters: list[Seat],
                               round_no: int = 1) -> dict[int, int | None]:
