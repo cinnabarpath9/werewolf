@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI 狼人杀 · 在线试玩（浏览器内跑）</title>
+<style>
+  :root { --bg:#0b0d12; --panel:#12161f; --line:rgba(255,255,255,.08); --tx:#ddd5c6;
+          --dim:#8b857a; --acc:#e4c07c; --good:#63b26a; --bad:#d4655f; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--tx);
+         font:14px/1.6 system-ui,-apple-system,"Segoe UI","Microsoft YaHei",sans-serif; }
+  header { padding:14px 18px; border-bottom:1px solid var(--line); display:flex; gap:10px; align-items:center; }
+  header b { font-size:16px; letter-spacing:.02em; }
+  header .tag { font-size:11.5px; color:var(--dim); border:1px solid var(--line); padding:2px 8px; border-radius:99px; }
+  main { max-width:920px; margin:0 auto; padding:18px; display:grid; gap:14px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:14px 16px; }
+  .card h3 { margin:0 0 8px; font-size:14.5px; }
+  .boards { display:grid; gap:10px; grid-template-columns:1fr 1fr; }
+  @media (max-width:720px) { .boards { grid-template-columns:1fr; } }
+  .board { border:1px solid var(--line); border-radius:10px; padding:10px 12px; cursor:pointer; background:#0f131b; }
+  .board.on { border-color:var(--acc); box-shadow:0 0 0 1px var(--acc) inset; }
+  .board .n { font-weight:600; }
+  .board .note { font-size:12px; color:var(--dim); margin-top:4px; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  input, select, textarea { background:#0d1118; color:var(--tx); border:1px solid var(--line);
+    border-radius:8px; padding:8px 10px; font:inherit; }
+  input, select { width:100%; }
+  .grid3 { display:grid; gap:8px; }
+  button { background:#1a2030; color:var(--tx); border:1px solid var(--line); border-radius:9px;
+           padding:8px 14px; font:inherit; cursor:pointer; }
+  button.primary { background:var(--acc); color:#1a1408; border-color:var(--acc); font-weight:600; }
+  button:disabled { opacity:.5; cursor:default; }
+  #ledger { max-height:360px; overflow:auto; background:#0d1118; border:1px solid var(--line);
+            border-radius:10px; padding:10px 12px; font-size:13px; }
+  .ln { padding:2px 0; border-bottom:1px dashed rgba(255,255,255,.05); }
+  .ln .d { color:var(--dim); font-size:11px; margin-right:6px; }
+  .ln.announce { color:#f0e4c8; }
+  .ln.speech { color:#cfd7e6; }
+  .ln.vote { color:#9fb0c8; }
+  .ln.private { color:#d9c6a5; }
+  #ask { display:none; }
+  #ask.on { display:block; border-color:var(--acc); }
+  .hint { color:var(--dim); font-size:12px; }
+  .bad { color:var(--bad); } .good { color:var(--good); }
+  #log { white-space:pre-wrap; font-size:12px; color:var(--dim); max-height:140px; overflow:auto; }
+</style>
+</head>
+<body>
+<header>
+  <b>AI 狼人杀 · 在线试玩</b>
+  <span class="tag">引擎跑在你的浏览器里</span>
+  <span class="tag">不需要服务器 / 不需要注册</span>
+</header>
+
+<main>
+  <div class="card">
+    <h3>1. 选一个板子</h3>
+    <div class="boards">
+      <div class="board on" data-board="six_all_reveal">
+        <div class="n">6 人明牌板（推荐试玩）</div>
+        <div class="note">2 狼 + 预言家 + 女巫 + 2 民；出局亮身份。一局约 5~10 分钟，流程最短，适合先试手感。</div>
+      </div>
+      <div class="board" data-board="eleven_wolfking">
+        <div class="n">11 人狼王板（完整流程）</div>
+        <div class="note">3 狼 + 狼王 + 预女梦愚 + 三张民牌；首夜无刀。一局约 20~30 分钟，模型调用会明显更慢。</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>2. 填你自己的模型（只保存在你本机浏览器里）</h3>
+    <div class="grid3">
+      <input id="baseUrl" placeholder="Base URL，例如 https://api.deepseek.com/v1" autocomplete="off">
+      <input id="model" placeholder="模型名，例如 deepseek-chat" autocomplete="off">
+      <input id="apiKey" type="password" placeholder="API Key" autocomplete="off">
+    </div>
+    <div class="row" style="margin-top:10px">
+      <label class="hint"><input type="checkbox" id="mockMode" style="width:auto"> 离线演练（不用 key，规则 Bot）</label>
+      <span class="hint" id="corsHint">⚠️ 浏览器会直接连这个地址；渠道必须允许跨域（CORS）。火山方舟/千帆通常不允许，OpenAI/部分中转可以。</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="row">
+      <button class="primary" id="btnStart" type="button" disabled>正在加载引擎…</button>
+      <span class="hint" id="state"></span>
+    </div>
+  </div>
+
+  <div class="card" id="ask">
+    <h3 id="askTitle">轮到你行动</h3>
+    <div class="hint" id="askText" style="margin-bottom:8px"></div>
+    <div id="askBody"></div>
+  </div>
+
+  <div class="card">
+    <h3>对局记录</h3>
+    <div id="ledger"><div class="hint">还没开始。</div></div>
+  </div>
+
+  <div class="card">
+    <h3>调试日志</h3>
+    <div id="log"></div>
+  </div>
+</main>
+
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.4/full/pyodide.js"></script>
+<script>
+const $ = (id) => document.getElementById(id);
+const STORE = 'wolf.play.provider';
+let pyodide = null, running = false, board = 'six_all_reveal';
+let askResolve = null;
+
+const MODULES = [
+  'wolf/__init__.py', 'wolf/engine.py', 'wolf/roles.py', 'wolf/context.py', 'wolf/rules.py',
+  'wolf/words.py', 'wolf/ledger.py', 'wolf/tabletalk.py', 'wolf/persona.py', 'wolf/llm.py',
+  'wolf/agents.py', 'wolf/browser_glue.py',
+];
+const CONTENT = [
+  'content/01_规则书.md', 'content/04_角色书.md', 'content/05_战术书.md', 'content/06_概念库.md',
+];
+
+function log(msg) {
+  const el = $('log');
+  el.textContent = (msg + '\n' + el.textContent).slice(0, 4000);
+}
+
+function loadProvider() {
+  try { return JSON.parse(localStorage.getItem(STORE) || '{}') || {}; } catch (e) { return {}; }
+}
+function saveProvider() {
+  try {
+    localStorage.setItem(STORE, JSON.stringify({
+      baseUrl: $('baseUrl').value.trim(), model: $('model').value.trim(), apiKey: $('apiKey').value.trim(),
+    }));
+  } catch (e) { /* 隐私模式忽略 */ }
+}
+
+document.querySelectorAll('.board').forEach(el => {
+  el.onclick = () => {
+    document.querySelectorAll('.board').forEach(x => x.classList.remove('on'));
+    el.classList.add('on');
+    board = el.dataset.board;
+  };
+});
+
+async function fetchText(path) {
+  const res = await fetch(path, { cache: 'no-store' });
+  if (!res.ok) throw new Error(`${path}: HTTP ${res.status}`);
+  return await res.text();
+}
+
+async function boot() {
+  $('state').textContent = '下载运行环境（约 10MB，首次会慢）…';
+  pyodide = await loadPyodide();
+  try { await pyodide.loadPackage(['pyyaml']); } catch (e) { log('pyyaml 没装上：' + e); }
+  log('pyodide 就绪');
+  pyodide.FS.mkdirTree('/wolf-wasm/wolf');
+  pyodide.FS.mkdirTree('/wolf-wasm/content');
+  for (const p of MODULES.concat(CONTENT)) {
+    const text = await fetchText(p);
+    pyodide.FS.writeFile('/wolf-wasm/' + p, text);
+  }
+  pyodide.FS.mkdirTree('/wolf-wasm/content/personas');
+  pyodide.runPython(`
+import sys
+sys.path.insert(0, '/wolf-wasm')
+import os
+os.chdir('/wolf-wasm')
+`);
+  await pyodide.runPythonAsync('import wolf.browser_glue');
+  log('引擎加载完成');
+  $('btnStart').disabled = false;
+  $('btnStart').textContent = '开始游戏';
+  $('state').textContent = '引擎已就绪（跑在你浏览器里）';
+}
+
+window.__wolfEvent = (raw) => {
+  let m = {};
+  try { m = JSON.parse(raw); } catch (e) { return; }
+  if (m.kind === 'ledger' && m.entry) {
+    const e = m.entry;
+    const div = document.createElement('div');
+    div.className = 'ln ' + (e.kind || '');
+    div.innerHTML = `<span class="d">第${e.day}天</span>` +
+      (e.seat ? `<b>${e.seat}号</b>：` : '') + escapeHtml(e.text || '');
+    const box = $('ledger');
+    if (box.firstChild && box.firstChild.className === 'hint') box.innerHTML = '';
+    box.appendChild(div);
+    box.scrollTop = box.scrollHeight;
+  } else if (m.kind === 'end') {
+    log('结束：' + m.winner + '（第 ' + m.day + ' 天）');
+    $('state').textContent = '本局结束：' + (m.winner === 'good' ? '好人胜' : m.winner === 'wolf' ? '狼人胜' : m.winner);
+  }
+};
+
+window.__wolfAsk = (raw) => {
+  const ask = JSON.parse(raw);
+  return new Promise((resolve) => {
+    askResolve = (payload) => { askResolve = null; $('ask').classList.remove('on'); resolve(JSON.stringify(payload)); };
+    renderAsk(ask);
+  });
+};
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"]/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;' }[c]));
+}
+
+const FIELD = {
+  vote: 'vote', wolf_kill: 'target', wolf_talk: 'target', seer_check: 'check',
+  guard: 'target', dream: 'target', hunter_shoot: 'target', wolf_king_take: 'target',
+  sheriff_vote: 'vote', badge: 'pass_to',
+};
+const LABEL = {
+  speech: '轮到你发言', sheriff_speech: '轮到你竞选发言', vote: '轮到你投票',
+  wolf_kill: '狼队：今晚杀谁', wolf_talk: '狼队讨论', seer_check: '预言家查验',
+  witch: '女巫用药', guard: '守卫行动', dream: '摄梦人行动', lucky: '幸运儿技能',
+  hunter_shoot: '猎人开枪', wolf_king_take: '狼王带走一人', last_words: '你的遗言',
+  badge: '警徽怎么处理', sheriff_run: '要不要竞选警长', sheriff_order: '警长定发言方向',
+  wolf_explode: '要不要自爆', sheriff_vote: '投警长',
+};
+
+function renderAsk(ask) {
+  $('ask').classList.add('on');
+  $('askTitle').textContent = LABEL[ask.kind] || '轮到你行动';
+  $('askText').textContent = ask.text || '';
+  const body = $('askBody');
+  body.innerHTML = '';
+  const send = (payload) => askResolve && askResolve(payload);
+
+  if (ask.kind === 'speech' || ask.kind === 'sheriff_speech' || ask.kind === 'last_words') {
+    const ta = document.createElement('textarea');
+    ta.rows = 4; ta.style.width = '100%';
+    ta.placeholder = '说点什么（AI 会当真）…';
+    body.appendChild(ta);
+    const claim = document.createElement('input');
+    claim.placeholder = '要声称的身份（可空）';
+    claim.style.marginTop = '8px';
+    body.appendChild(claim);
+    const btn = document.createElement('button');
+    btn.className = 'primary'; btn.textContent = '发送发言';
+    btn.style.marginTop = '8px';
+    btn.onclick = () => send({
+      speech: ta.value.trim() || '（我过，先听后面的。）',
+      claim: claim.value.trim() || '无', suspect: [], reason: '玩家自己说的',
+    });
+    body.appendChild(btn);
+    return;
+  }
+
+  const legal = (ask.legal || []).filter(x => x);
+  const row = document.createElement('div');
+  row.className = 'row';
+  if (legal.length) {
+    for (const n of legal) {
+      const b = document.createElement('button');
+      b.textContent = n + '号';
+      b.onclick = () => {
+        const field = FIELD[ask.kind] || 'target';
+        send({ [field]: n });
+      };
+      row.appendChild(b);
+    }
+  }
+  if (!legal.length) {
+    const b = document.createElement('button');
+    b.textContent = '确认/过';
+    b.onclick = () => send({});
+    row.appendChild(b);
+  }
+  body.appendChild(row);
+  if (ask.kind === 'sheriff_run') {
+    const skip = document.createElement('button');
+    skip.textContent = '不上警';
+    skip.onclick = () => send({ run: false });
+    body.appendChild(skip);
+  }
+}
+
+$('btnStart').onclick = async () => {
+  if (running) return;
+  const prov = {
+    baseUrl: $('baseUrl').value.trim(), model: $('model').value.trim(), apiKey: $('apiKey').value.trim(),
+  };
+  saveProvider();
+  const mock = $('mockMode').checked;
+  if (!mock && (!prov.baseUrl || !prov.model || !prov.apiKey)) {
+    $('state').innerHTML = '<span class="bad">要么勾「离线演练」，要么把 Base URL / 模型 / key 填全。</span>';
+    return;
+  }
+  running = true;
+  $('btnStart').disabled = true;
+  $('ledger').innerHTML = '';
+  $('state').textContent = '对局进行中…（每个模型回合都要等它回包）';
+  const args = JSON.stringify({ board, mock, base: prov.baseUrl, model: prov.model, key: prov.apiKey });
+  try {
+    await pyodide.runPythonAsync(`
+import json as _j
+import wolf.browser_glue as _g
+_cfg = _j.loads(${JSON.stringify(args)})
+await _g.run_game(
+    board=_cfg["board"], human_seat=1,
+    base_url=_cfg["base"] if not _cfg["mock"] else "",
+    model=_cfg["model"] if not _cfg["mock"] else "",
+    api_key=_cfg["key"] if not _cfg["mock"] else "",
+    seed=7, mock=_cfg["mock"],
+)
+`);
+  } catch (err) {
+    log('❌ 运行失败：' + (err && err.message ? err.message : err));
+    $('state').innerHTML = '<span class="bad">这局没能跑完，看下面调试日志。</span>';
+  } finally {
+    running = false;
+    $('btnStart').disabled = false;
+    $('btnStart').textContent = '再来一局';
+  }
+};
+
+(function init() {
+  const p = loadProvider();
+  $('baseUrl').value = p.baseUrl || '';
+  $('model').value = p.model || '';
+  $('apiKey').value = p.apiKey || '';
+  boot().catch(err => {
+    log('❌ 环境加载失败：' + (err && err.message ? err.message : err));
+    $('state').innerHTML = '<span class="bad">引擎没加载起来（多半是 CDN 或被墙）。</span>';
+    $('btnStart').textContent = '引擎加载失败';
+  });
+})();
+</script>
+</body>
+</html>

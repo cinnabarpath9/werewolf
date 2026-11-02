@@ -12,7 +12,10 @@ import json
 import re
 from urllib.parse import urlparse
 
-import httpx
+try:                                    # 浏览器内（Pyodide）没有 httpx：
+    import httpx                        # 那里只用得到本模块的 SYSTEM_PROMPT / extract_json，
+except ImportError:                     # 真建 LLMClient 时才需要 httpx（会显式报错）
+    httpx = None                        # type: ignore[assignment]
 
 
 def _int0(value) -> int:
@@ -648,6 +651,8 @@ class LLMClient:
                       "cached_tokens": 0, "errors": 0, "seconds": 0.0}
         #: 最近一次调用的原始材料，供复盘使用（推理链、原始回复、用量）
         self.last_call: dict = {}
+        if httpx is None:
+            raise LLMError("这个环境里没有 httpx（浏览器版不走 LLMClient，请用 browser_glue）")
         self._client = httpx.AsyncClient(
             base_url=self.base_url,
             timeout=httpx.Timeout(timeout, connect=20.0),
