@@ -3862,6 +3862,17 @@ async def api_settings_voice(request: Request):
     return JSONResponse(_settings_payload(data))
 
 
+@app.get("/healthz")
+async def healthz():
+    """平台健康检查专用（2026-11-02）：**不校验配对码、不要客户端头**。
+
+    为什么单开一个：Render 这类平台的健康检查是**裸 GET**，不带 `X-Wolf-Client`，
+    指向 `/api/status` 会被 CSRF 闸门 403 ⇒ 平台判定"服务不健康"、整次部署失败。
+    这里只回一个"活着"，不泄露任何配置。
+    """
+    return JSONResponse({"ok": True})
+
+
 @app.get("/api/site")
 async def api_site():
     """开源仓库 / 交流群等公开信息（`web/site.json`）。

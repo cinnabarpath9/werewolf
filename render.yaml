@@ -10,7 +10,7 @@ services:
     runtime: docker
     dockerfilePath: ./Dockerfile
     plan: free
-    healthCheckPath: /api/status
+    healthCheckPath: /healthz
     envVars:
       - key: WOLF_EPHEMERAL
         value: "1"          # 启动时打印"存档不保留"的提示
