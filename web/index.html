@@ -2134,15 +2134,25 @@ function renderSiteLinks() {
   if (/^https?:\/\//i.test(SITE.qq_link)) {
     out.push(`<a class="home-link" href="${escapeHtml(SITE.qq_link)}" target="_blank" rel="noopener noreferrer">
       <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 3C7.6 3 4 6.2 4 10.2c0 2.3 1.2 4.3 3.1 5.6-.2.8-.7 2-1.3 2.9-.2.3.1.6.4.5 1.2-.3 2.3-.9 2.9-1.3.9.3 1.9.4 2.9.4 4.4 0 8-3.2 8-7.2S16.4 3 12 3Z"/></svg>
-      ${SITE.qq_group ? 'Q 群 ' + escapeHtml(SITE.qq_group) : '交流群'}</a>`);
+      ${SITE.qq_group ? '反馈与交流 ' + escapeHtml(SITE.qq_group) : '反馈与交流'}</a>`);
   } else if (SITE.qq_group) {
     out.push(`<span class="home-link"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 3C7.6 3 4 6.2 4 10.2c0 2.3 1.2 4.3 3.1 5.6-.2.8-.7 2-1.3 2.9-.2.3.1.6.4.5 1.2-.3 2.3-.9 2.9-1.3.9.3 1.9.4 2.9.4 4.4 0 8-3.2 8-7.2S16.4 3 12 3Z"/></svg>
-      Q 群 ${escapeHtml(SITE.qq_group)}</span>`);
+      反馈与交流 ${escapeHtml(SITE.qq_group)}</span>`);
   }
   if (/^https?:\/\//i.test(SITE.afdian)) {
     out.push(`<a class="home-link" href="${escapeHtml(SITE.afdian)}" target="_blank" rel="noopener noreferrer">
       <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 21s-7.5-4.6-9.4-9A5.4 5.4 0 0 1 12 6.2 5.4 5.4 0 0 1 21.4 12c-1.9 4.4-9.4 9-9.4 9Z"/></svg>
       感谢赞助</a>`);
+  }
+  // 2026-11-02：主页也放网盘入口（用户要求「云端页面也加这几个跳转」）
+  const pansHome = (Array.isArray(SITE.pans) && SITE.pans.length)
+    ? SITE.pans : (typeof PAN_FALLBACK !== 'undefined' ? PAN_FALLBACK : []);
+  for (const p of pansHome) {
+    if (!p || !/^https?:\/\//i.test(p.url || '')) continue;
+    const code = p.code ? `（提取码 ${escapeHtml(p.code)}）` : '';
+    out.push(`<a class="home-link" href="${escapeHtml(p.url)}" target="_blank" rel="noopener noreferrer">
+      <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 3v10m0 0 4-4m-4 4-4-4M5 17h14v3H5z"/></svg>
+      ${escapeHtml(p.name || '下载')}${code}</a>`);
   }
   if (!out.length) {
     // 没填链接时给右下角一个安静版本号，别留一块完全空着的角
