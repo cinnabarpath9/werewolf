@@ -6,9 +6,12 @@
 [![爱发电](https://img.shields.io/badge/%E7%88%B1%E5%8F%91%E7%94%B5-%E6%84%9F%E8%B0%A2%E8%B5%9E%E5%8A%A9-ff7ab2?style=flat-square)](https://afdian.com/a/langrensha)
 [![QQ 群](https://img.shields.io/badge/QQ%E7%BE%A4-%E5%8A%A0%E7%BE%A4%E4%BA%A4%E6%B5%81-12b7f5?style=flat-square)](https://qm.qq.com/q/68VcRJr3Py)
 [![许可](https://img.shields.io/badge/%E8%AE%B8%E5%8F%AF-%E9%9D%9E%E5%95%86%E4%B8%9A%E6%BA%90%E7%A0%81%E5%8F%AF%E8%A7%81-2ea44f?style=flat-square)](LICENSE)
+[![在线试玩](https://img.shields.io/badge/%E5%9C%A8%E7%BA%BF-%E8%AF%95%E7%8E%A9%E5%8D%B3%E7%82%B9%E5%8D%B3%E7%8E%A9-2ea44f?style=flat-square)](https://cinnabarpath9.github.io/werewolf/web/play.html)
 [![云端一键部署](https://img.shields.io/badge/%E4%BA%91%E7%AB%AF-%E4%B8%80%E9%94%AE%E9%83%A8%E7%BD%B2-f97316?style=flat-square)](https://render.com/deploy?repo=https://github.com/cinnabarpath9/werewolf)
 
 > ☕ **[爱发电 · 感谢赞助](https://afdian.com/a/langrensha)**　·　💬 **[加入 Q 群交流](https://qm.qq.com/q/68VcRJr3Py)**　·　⬇ **[夸克网盘](https://pan.quark.cn/s/00bf04be5c63)** / **[百度网盘](https://pan.baidu.com/s/1WfrytBb-xyHMDLlZUIN9Hw)**（提取码 `vv9n`）
+>
+> 🟢 **[在线试玩（点开即玩，填自己的 key）](https://cinnabarpath9.github.io/werewolf/web/play.html)**　·　**6 人板推荐先试**（5~10 分钟）/ 11 人板是完整流程（20~30 分钟）
 >
 > ☁️ **[云端一键部署（Render，用自己的 key）](https://render.com/deploy?repo=https://github.com/cinnabarpath9/werewolf)**　·　不想装 Python 就用这个；步骤见 §7
 
@@ -134,7 +137,7 @@
 - ⚠️ **浏览器直连模型要看渠道允不允许跨域（CORS）**：OpenAI 官方与多数中转可以；
   火山方舟、千帆这类通常不允许（它们要服务端调用）。被拦时页面会直接报错，不会假装能跑；
 - **运行环境同源托管**：`web/pyodide/`（约 13MB，v0.26.4）已随仓库一起放，页面优先从同源加载，CDN 只作回退 —— 不会被 CDN 墙住；首次打开慢一次，之后走浏览器缓存；
-- 部署方式：把仓库当静态站发布（例如 GitHub Pages），打开 `/web/play.html` 即可；
+- 已发布在 GitHub Pages：<https://cinnabarpath9.github.io/werewolf/web/play.html>（仓库 Settings → Pages，无服务器、零额度）；
   这批 pyodide 文件**不进发布包**（`build_release.py` 已排除），只服务静态托管。
 
 ## 7. 云端一键部署（用自己的 key）
