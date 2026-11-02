@@ -30,7 +30,10 @@ import re
 import unicodedata
 from dataclasses import dataclass, field
 
-import yaml
+try:                                    # 浏览器内（Pyodide）默认不装 PyYAML：
+    import yaml                         # 没有它只影响"人设卡"，规则/对局完全正常
+except ImportError:
+    yaml = None                         # type: ignore[assignment]
 
 #: 出现这些词就基本可以断定"人设越界了"。
 #:
@@ -321,6 +324,9 @@ def load(cfg: dict, project_root: str) -> PersonaSet:
       game.personas: {1: "personas/1.md"}  # 指向文件
       game.personas: {1: "你说话很简短。"}  # 直接内联（没有 front-matter 就当纯正文）
     """
+    if yaml is None:
+        return {}
+
     game_cfg = (cfg or {}).get("game") or {}
     result = PersonaSet()
 

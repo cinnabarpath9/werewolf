@@ -152,9 +152,16 @@ async function fetchText(path) {
 }
 
 async function boot() {
-  $('state').textContent = '下载运行环境（约 10MB，首次会慢）…';
-  pyodide = await loadPyodide();
-  try { await pyodide.loadPackage(['pyyaml']); } catch (e) { log('pyyaml 没装上：' + e); }
+  $('state').textContent = '下载运行环境（约 13MB，首次会慢；之后走缓存）…';
+  // 2026-11-02：**优先同源** web/pyodide/（避免 CDN 被墙），本地没有才回退 CDN。
+  try {
+    pyodide = await loadPyodide({ indexURL: './pyodide/' });
+    log('运行环境：同源 web/pyodide/');
+  } catch (e) {
+    log('同源加载失败（' + (e && e.message ? e.message : e) + '），回退 CDN…');
+    pyodide = await loadPyodide({ indexURL: 'https://cdn.jsdelivr.net/pyodide/v0.26.4/full/' });
+    log('运行环境：CDN');
+  }
   log('pyodide 就绪');
   pyodide.FS.mkdirTree('/wolf-wasm/wolf');
   pyodide.FS.mkdirTree('/wolf-wasm/content');

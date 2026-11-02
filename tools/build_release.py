@@ -95,6 +95,9 @@ SANITIZE: dict[str, list[tuple[str, str]]] = {
 
 #: 目录内永远不带的东西
 IGNORE = shutil.ignore_patterns(
+    # 2026-11-02：web/pyodide/ 是给**静态托管**用的运行环境（约 13MB），不进发布包；
+    # 发布包里的客户端走的是自己电脑上的服务端，不需要它。
+    "pyodide",
     "__pycache__", "*.pyc", "*.pyo", ".DS_Store", "Thumbs.db", "*.log",
     "personas_backups", "legacy", "外部审查", "_tmp_*", "_retired_draft.json",
     "settings.local.json", ".env", "配对码.txt", "联机码.txt",
