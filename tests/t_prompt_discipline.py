@@ -128,6 +128,18 @@ async def main() -> int:
           all(k in p for p in packets for k in JUDGE_MARKS),
           f"{sum('证据有先后' in p for p in packets)}/{len(packets)}")
 
+    # ── 1.5 时间线纪律（2026-11-03 真局复盘：悍跳狼用今天才公开的"上警/前置位"
+    #        去解释昨晚为什么验人，被好人当场抓成时间线穿帮）──────────────────
+    _sys_prompt = io.open(os.path.join(ROOT, "wolf", "llm.py"), encoding="utf-8").read()
+    check("1e 系统提示词里有「时间线纪律」", "时间线纪律" in _sys_prompt and "昨晚" in _sys_prompt)
+    _playbook = io.open(os.path.join(ROOT, "content", "04_角色书.md"), encoding="utf-8").read()
+    check("1f 打法书给了固定报验句式（昨晚 + 查杀/金水）",
+          "报验句式" in _playbook and "昨晚我验的是" in _playbook)
+    check('1g 打法书点明「不能用今天才公开的信息」', "绝不能" in _playbook and "昨晚之前就有" in _playbook)
+    check("1h 每个发言包里都带时间线提醒",
+          all("时间线" in p for p in packets),
+          f"{sum('时间线' in p for p in packets)}/{len(packets)}")
+
     # ── 2. 变异自证：把命中的句子从包里抠掉，同一套断言必须变红 ──────────
     if packets:
         p0 = packets[0]
