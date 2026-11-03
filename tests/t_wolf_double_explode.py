@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import os
 import re
 import sys
@@ -212,6 +213,18 @@ check("6b 公告写「双狼自爆」+ 警徽被吞", text_has(g6, "双狼自爆
       f"sheriff={g6.sheriff_id}")
 _resumes = sum(1 for e in g6.ledger.entries if "警长竞选恢复（" in (e.text or ""))
 check("6c 只恢复过一次（不能反复挂起）", _resumes == 1, str(_resumes))
+
+print("\n=== 七、按钮与报文：狼王看不到「自爆」===")
+g7, _log7 = run({"*": {"explode": False}}, None)
+king = g7.seat_by_id(KING_SEAT)
+wolf1 = g7.seat_by_id(1)
+check("7a 引擎说狼王不能爆", g7.can_explode(king) is False)
+check("7b 引擎说小狼能爆", g7.can_explode(wolf1) is True)
+# 服务端：you 报文必须带 can_explode（前端据此显隐按钮，不按角色名硬编码）
+_srv = io.open(os.path.join(ROOT, "server.py"), encoding="utf-8").read()
+check("7c 服务端 you 报文带 can_explode", '"can_explode": can_explode' in _srv)
+_html = io.open(os.path.join(ROOT, "web", "index.html"), encoding="utf-8").read()
+check("7d 前端按 can_explode 显隐自爆按钮", "S.you.can_explode" in _html and "if (!canExplode) return;" in _html)
 
 print("\n" + "=" * 64)
 print(f"共 {N} 项：通过 {N - BAD}，失败 {BAD}")

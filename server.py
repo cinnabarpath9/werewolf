@@ -954,8 +954,14 @@ class Room:
             return None
         mates = [s.id for s in game.seats
                  if s.camp == me.camp and s.id != me.id] if me.camp == "wolf" else []
+        # 2026-11-03：狼王禁爆（11 人板）——**能不能爆由引擎判定**，别让前端按角色名硬编码
+        try:
+            can_explode = bool(game.can_explode(me))
+        except Exception:                          # noqa: BLE001 —— 老引擎没有这个方法
+            can_explode = me.camp == "wolf"
         return {"type": "you", "seat": me.id, "role": role_name(me.role_key),
                 "camp": camp_label(me.camp), "mates": mates,
+                "can_explode": can_explode,
                 "name": getattr(me, "card_name", "") or ""}
 
     def send_you(self, ws: WebSocket, seat: int) -> None:

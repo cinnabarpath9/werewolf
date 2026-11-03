@@ -4364,8 +4364,11 @@ function renderAsk(f, ask) {
   // 多给一个「自爆」按钮 —— 点它 = 交一份只有 explode 的答复。
   // 只有真人自己知道自己是狼（S.you.camp === '狼人'），所以这个按钮只对狼显示。
   const iAmWolf = !!(S.you && (S.you.camp === '狼人' || S.you.camp === 'wolf'));
+  // 2026-11-03：狼王禁爆 —— 能不能爆**问服务端**（`S.you.can_explode`），别在前端按角色名硬编码；
+  // 老服务端没有这个字段时回退到"是狼就能爆"的旧行为。
+  const canExplode = !!(S.you && (S.you.can_explode !== undefined ? S.you.can_explode : iAmWolf));
   const addExplodeBtn = (row) => {
-    if (!iAmWolf) return;
+    if (!canExplode) return;
     row.appendChild(mkBtn('💥 自爆（亮身份出局，今天不再发言投票，今晚照常刀人）', () => {
       answer({ explode: true, reason: '人类玩家（狼）决定自爆' });
       S.ask = null; renderFooter();
