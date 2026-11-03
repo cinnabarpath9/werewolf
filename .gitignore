@@ -47,3 +47,23 @@ dist-play/
 # 桌面客户端产物（52MB+，只发布不上库）
 dist-exe/
 dist/
+
+# ── 开发件：只在本机，不进公开仓库（2026-11-04 作者要求）──────────────
+tests/                  # 回归/一次性探针：本机跑，公开仓库不带
+tools/exam*.py
+tools/exam_*.yaml
+tools/legacy/
+tools/_retired_draft.json
+tools/_tmp_j2_state.py
+tools/balance_probe.py
+tools/bench_thinking.py
+tools/call_structure.py
+tools/check_api.py
+tools/compare_models.py
+tools/context_ab.py
+tools/fill_from_txt.py
+tools/pick_save.py
+tools/project_audit.py
+tools/rules_ab.py
+tools/smoke_real.py
+tools/ws_autoplay.py

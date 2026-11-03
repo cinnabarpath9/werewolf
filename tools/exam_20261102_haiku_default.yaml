@@ -1,6 +1,0 @@
-# 2026-11-02 Haiku 默认档（不发思考档、不发 temperature）
-models:
-  - name: Haiku_default
-    profile: HAIKU
-    temperature: null
-    max_tokens: 8000

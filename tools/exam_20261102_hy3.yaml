@@ -1,6 +1,0 @@
-# 2026-11-02 hy3 默认档（不发思考档、不发 temperature）
-models:
-  - name: HY3_default
-    profile: HY3
-    temperature: null
-    max_tokens: 8000
