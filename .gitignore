@@ -49,7 +49,8 @@ dist-exe/
 dist/
 
 # ── 开发件：只在本机，不进公开仓库（2026-11-04 作者要求）──────────────
-tests/                  # 回归/一次性探针：本机跑，公开仓库不带
+# 回归/一次性探针：本机跑，公开仓库不带
+tests/
 tools/exam*.py
 tools/exam_*.yaml
 tools/legacy/
