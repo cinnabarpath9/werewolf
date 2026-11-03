@@ -31,6 +31,12 @@
       "raw": "{\"analysis\":\"（内部推理）3 号像狼\",\"speech\":\"\"}",
       "want_speech": "",
       "why": "只读 speech 等公开字段；analysis 这类子树不许出现在字幕/发言里"
+    },
+    {
+      "name": "封套 + 单引号（需先修复语法、再拆封套）",
+      "raw": "{'role':'assistant','content':'{\"speech\":\"修好语法后还要记得拆封套\"}'}",
+      "want_speech": "修好语法后还要记得拆封套",
+      "why": "第一轮走 _merge_objects 会拆封套；修复路径以前直接返回封套 dict（现在两条路都拆）"
     }
   ]
 }

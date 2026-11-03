@@ -257,6 +257,7 @@ L2_LOCAL_SERIAL = (
 #   判据：实测 ≥ 4s 的纯本地脚本。`--fast` 要的是"秒级"，所以不带它们；
 #   `--quick` 和全量都照跑。
 L2_LOCAL_MEDIUM = (
+    "t_package_contract.py",             # 打包/复检契约（会真跑一次打包，~3s）
     "t_retry_budget.py",                 # 预算不够不再硬试第二次（睡 2s+3s）实测 ~5s
     "t_auto_retry.py",                # 引擎自动重试 + 退避（3s→8s）            实测 ~2.5s
     "t_call_timeout_human.py",        # call_timeout 只砍模型座位               实测 ~4.6s

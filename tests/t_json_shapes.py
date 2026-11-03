@@ -55,17 +55,26 @@ got = extract_json('{"analysis":"（内部推理）3 号像狼","speech":""}')
 check("2a analysis 不会变成发言", "3 号像狼" not in str(got.get("speech") or ""), str(got)[:60])
 check("2b 只给了私有字段时 speech 为空", not str(got.get("speech") or ""))
 try:
-    extract_json('{"role":"assistant","content":"这不是 JSON"}')
-    ok_empty = True
+    got2c = extract_json('{"role":"assistant","content":"这不是 JSON"}')
 except LLMError:
-    ok_empty = True
-check("2c 封套里的 content 不是 JSON → 不给假发言", ok_empty)
+    got2c = {}
+check("2c 封套里的 content 不是 JSON → 不给假发言",
+      not str(got2c.get("speech") or ""), str(got2c)[:50])
+got2e = extract_json("{'role':'assistant','content':'{\"speech\":\"修好语法后还要记得拆封套\"}'}")
+check("2e 需要语法修复的封套也不许把封套当发言",
+      str(got2e.get("speech") or "") in ("", "修好语法后还要记得拆封套"), str(got2e)[:60])
 try:
     extract_json("完全没有 JSON 的一段话")
     raised = False
 except LLMError:
     raised = True
 check("2d 完全没有 JSON → 抛 LLMError（调用方可以降级）", raised)
+try:
+    extract_json("{}")
+    empty_raised = False
+except LLMError:
+    empty_raised = True
+check("2f 字面空对象 {} → 抛 LLMError（以前被当成功，会编造发言/随机决策）", empty_raised)
 
 print("\n" + "=" * 60)
 print(f"共 {N} 项：通过 {N - BAD}，失败 {BAD}")

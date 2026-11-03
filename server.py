@@ -1177,7 +1177,8 @@ class Room:
         # 任务说明也按 speech_plan 口径，而不是人类面板那句短提示。
         from wolf import butler as butler_mod                     # noqa: PLC0415
         seat_obj = self.game.seat_by_id(seat) if self.game else None
-        if kind == "speech" and seat_obj is not None and self.game is not None:
+        if (kind == "speech" and not (getattr(task, "extra", None) or {}).get("pk")
+                and seat_obj is not None and self.game is not None):
             task, packet = butler_mod.build_speech_call(self.game, seat_obj,
                                                         int(self.game.day or 1))
             kind = task.kind
@@ -1601,7 +1602,7 @@ class Room:
                 # 审查 P2：`or` 会把合法的 0 当缺省；这里只在"没填"时兜底
                 temperature=(1.0 if _temp is None else float(_temp)),
                 max_tokens=(20000 if _tokens is None else int(_tokens)),
-                timeout=float(getattr(self, "call_timeout", 450) or 450),
+                timeout=float(getattr(self, "call_timeout", 150) or 150),
                 # plain 风格本来就不发任何思考参数，配档位是空转（审查 P2）—— 干脆留空
                 thinking=({} if _style == "plain" else
                           {"speech": {1: "low"}, "decision": {1: "low"}, "aux": {1: "low"}}),

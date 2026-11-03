@@ -75,9 +75,9 @@ print("\n=== 二、流式调用：累加 + 不沿用上一次 ===")
 async def stream_case():
     client = LLMClient(stream=True, **BASE)
     frames = [
-        ("{}", "", {"prompt_tokens": 100, "completion_tokens": 5,
+        ('{"speech":"x"}', "", {"prompt_tokens": 100, "completion_tokens": 5,
                     "prompt_tokens_details": {"cached_tokens": 64}}),
-        ("{}", "", {"prompt_tokens": 100, "completion_tokens": 5}),   # 平台这次没返回缓存
+        ('{"speech":"y"}', "", {"prompt_tokens": 100, "completion_tokens": 5}),   # 平台这次没返回缓存
     ]
 
     async def fake_stream(payload):
@@ -110,7 +110,7 @@ class _Resp:
     text = ""
 
     def json(self):
-        return {"choices": [{"message": {"content": "{}"}}],
+        return {"choices": [{"message": {"content": '{"speech":"x"}'}}],
                 "usage": {"prompt_tokens": 100, "completion_tokens": 3,
                           "prompt_tokens_details": {"cached_tokens": 30}}}
 
@@ -143,7 +143,7 @@ async def agent_case():
     client = LLMClient(stream=True, **BASE)
 
     async def fake_stream(payload):
-        return ("{}", "", {"prompt_tokens": 100, "completion_tokens": 5,
+        return ('{"speech":"x"}', "", {"prompt_tokens": 100, "completion_tokens": 5,
                            "prompt_tokens_details": {"cached_tokens": 64}})
 
     client._post_stream = fake_stream

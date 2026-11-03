@@ -682,7 +682,11 @@ def extract_json(text: str) -> dict:
         attempt = [s[depth] if depth < len(s) else c for s, c in zip(steps, candidates)]
         found = _extract_once(attempt)
         if found is not None:
-            return found
+            # ⚠️ 2026-11-04 审查 P1：修复路径以前**不拆封套**，`{'role':'assistant',...}` 修好语法后
+            #    仍原样返回封套 dict → speech 丢失。这里与第一轮走同一个合并/拆解入口。
+            merged = _merge_objects([found])
+            if merged:
+                return merged
 
     # 原文（没修过的）用来判错因：这样报错信息跟以前一样，别把修过的文本塞进报错里
     raw = candidates[-1]

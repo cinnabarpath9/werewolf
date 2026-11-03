@@ -44,6 +44,21 @@ def _free_port(start: int) -> int:
     raise RuntimeError(f"{start}~{start + PORT_TRY - 1} 都被占了，请先关掉占用端口的程序")
 
 
+def _lan_ips() -> list[str]:
+    """列出本机局域网 IPv4（给"朋友同一 Wi-Fi 加入"用）。"""
+    import socket as _s
+    out = set()
+    try:
+        host = _s.gethostname()
+        for info in _s.getaddrinfo(host, None, _s.AF_INET):
+            ip = info[4][0]
+            if not ip.startswith(("127.", "169.254.")):
+                out.add(ip)
+    except Exception:                                        # noqa: BLE001
+        pass
+    return sorted(out)
+
+
 def _wait_up(url: str, timeout: float = 40.0) -> bool:
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -65,7 +80,9 @@ def main() -> int:
 
     print("=" * 60)
     print(f"  {TITLE}")
-    print(f"  地址：{url}")
+    print(f"  本机：{url}")
+    for ip in _lan_ips():
+        print(f"  同一 Wi-Fi 的朋友用：http://{ip}:{port}/")
     print("  关闭本窗口 = 退出游戏（不会留后台进程）")
     print("  没填 API key 也能玩：页面上选「离线演练」")
     print("=" * 60, flush=True)
@@ -82,9 +99,29 @@ def main() -> int:
     # ⚠️ `server.py` 的 `--config` 默认是"**server.py 旁边**的 config.yaml"；
     #    打包后那是 `_internal\`（没有配置文件）→ 会静默回落到引擎兜底值（420/540）。
     #    必须显式指到 exe 旁边的 config.yaml（2026-11-04 实测：包内 150 却读到 420）。
-    sys.argv = ["server.py", "--host", "127.0.0.1", "--port", str(port),
-                "--config", os.path.join(base, "config.yaml")]
-    threading.Thread(target=server.main, daemon=True, name="wolf-server").start()
+    cfg_path = os.path.join(base, "config.yaml")
+    if not os.path.isfile(cfg_path):
+        print(f"\n[出错] 找不到配置文件：{cfg_path}")
+        print("       客户端包必须带上 config.yaml（打包脚本会生成）；单独拷 exe 出来是不行的。")
+        return 2
+    # ⚠️ 2026-11-04 审查 P1：以前这里写死 127.0.0.1，而《怎么玩.txt》教玩家用局域网地址加入
+    #    → 同一 Wi-Fi 的联机必失败。服务端默认就是 0.0.0.0，启动器不该把它改小。
+    sys.argv = ["server.py", "--host", "0.0.0.0", "--port", str(port),
+                "--config", cfg_path]
+    def _serve() -> None:
+        try:
+            server.main()
+        except Exception:                                    # noqa: BLE001
+            import traceback
+            text = traceback.format_exc()
+            try:
+                with open(os.path.join(base, "启动日志.txt"), "a", encoding="utf-8") as fh:
+                    fh.write(text + "\n")
+            except Exception:                                # noqa: BLE001
+                pass
+            print(text)
+
+    threading.Thread(target=_serve, daemon=True, name="wolf-server").start()
 
     if not _wait_up(url):
         print("\n[出错] 本地服务 40 秒内没起来。请看同目录的「启动日志.txt」。")

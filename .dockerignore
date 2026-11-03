@@ -7,6 +7,9 @@ settings.local.json*
 games/
 var/
 dist/
+dist-exe/
+experience/
+voice_cache/
 reports/
 tests/tmp/
 tests/_profiles/

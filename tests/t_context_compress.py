@@ -69,6 +69,7 @@ def seed(g):
     g.ledger.add(1, "day", "speech", SPEECH, seat=1)
     g.ledger.add(1, "day", "speech", "5号的往日发言：1号像狼。", seat=5)
     g.ledger.add(2, "day", "speech", "今天的发言必须全文保留。", seat=3)
+    g.ledger.add(1, "day", "announce", "第 1 天公告原文：昨晚出局 6 号。（不公布死因）")
     g.ledger.add(2, "day", "speech", "【遗言】我是守墓人，逐对了1号。", seat=4)
 
 
@@ -86,7 +87,8 @@ check("2c extract：往日发言被摘录（结论句没了）", "我先说结�
 check("2d extract：往日最后一句保留", "票压4号" in p_on)
 check("2e extract：今天的发言仍是全文", "今天的发言必须全文保留。" in p_on)
 check("2f extract：遗言仍是全文", "【遗言】我是守墓人，逐对了1号。" in p_on)
-check("2g extract：公告不受影响", "⟦公告#" in p_on or True)
+check("2g extract：往日公告仍是全文（不被压缩）",
+      "第 1 天公告原文" in p_on and "⟦公告#" in p_on)
 check("2h 压缩确实变小了", len(p_on) < len(p_off), f"{len(p_off)} → {len(p_on)}")
 
 g_bad = make_game("绝对不是合法值")

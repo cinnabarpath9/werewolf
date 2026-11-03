@@ -236,6 +236,10 @@ async def main() -> int:
         sheriff_picks_order=bool(game_cfg.get("sheriff_picks_order", True)),
         # 狼人自爆（变版规则）—— 用户 2026-10-08 加
         wolf_explode=bool(game_cfg.get("wolf_explode", True)),
+        # ⚠️ 2026-11-04 审查 P2：CLI 局以前没接这三项 → config 写 extract/限额在 CLI 里静默无效
+        context_compress=str(game_cfg.get("context_compress") or "off"),
+        call_timeout=float(game_cfg.get("call_timeout") or 0),
+        decision_timeout=float(game_cfg.get("decision_timeout") or 0),
     # 四狼刀口完全一致时跳过夜聊（作者 2026-10-09 批准的成本折中）
     wolf_talk_skip_when_unanimous=bool(
         game_cfg.get("wolf_talk_skip_when_unanimous", True)),

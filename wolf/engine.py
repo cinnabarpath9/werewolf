@@ -33,8 +33,8 @@ from .roles import (ROLES, WOLF as WOLF_CAMP, BoardDef, make_board, role_name,
 #: 并且从**句末**截断 —— 以前 `[:600]` 会从半句中间切，模型写超时用户看到的是断句。
 #: 2026-11-03（真局复盘）：模型嘴上说"不跳身份"，却在发言里把身份报了出来、claim 还落了账。
 #: 命中这些说法时，claim 一律不算（发言原话保留，只不记"声称"）。
-NO_CLAIM_MARKS = ("不跳身份", "不报身份", "不亮身份", "先不跳", "暂不跳", "不想跳",
-                  "不跳了", "不能跳身份", "先藏身份")
+NO_CLAIM_MARKS = ("不跳身份", "不报身份", "不亮身份", "先不跳", "暂不跳",
+                  "这轮不跳", "不能跳身份", "先藏身份")
 
 SPEECH_LIMIT = 800
 
@@ -166,10 +166,10 @@ def normalize_word(value) -> str:
 #:   `tools/exam_live.py` 又写 150、引擎自己的参数默认是 0（= 不设上限）。
 #: 结果：配置里一旦漏写/写错键名，手机显示「最多等到 300 秒」而引擎 150 秒就砍了
 #: —— 正是这个项目最忌讳的「两把尺」。现在 status 与真正建局走同一个函数。
-#: ⚠️ 数值口径与 `config.yaml` 的**正式值保持一致**（420 / 540）；这里只是**缺键兜底**，
+#: ⚠️ 数值口径与 `config.yaml` 的**正式值保持一致**（150 / 540）；这里只是**缺键兜底**，
 #:    改 config 时顺手同步它 —— 否则"配置漏写一个键"就悄悄变成另一套时间口径。
-#:    （2026-10-25 从 300/300 改成 420/540：生产早就不是 300 了，兜底却还停在旧值上。）
-DEFAULT_CALL_TIMEOUT = 420.0
+#:    （沿革：300/300 → 420/540（2026-10-25）→ **150/540**（2026-11-03 作者把单次收到 150）。）
+DEFAULT_CALL_TIMEOUT = 150.0
 DEFAULT_DECISION_TIMEOUT = 540.0
 
 
@@ -432,6 +432,10 @@ class Game:
         #: 往日发言压缩：off（默认，全文）/ extract（摘录：身份声明 + 最后一句）
         _cc = str(context_compress or "off").strip().lower()
         self.context_compress = _cc if _cc in ("off", "extract") else "off"
+        self._config_warns: list[str] = []
+        if _cc not in ("off", "extract"):
+            self._config_warns.append(
+                f"game.context_compress={context_compress!r} 不认识（只认 off/extract），已按 off 处理")
         self.sheriff_min_seats = int(sheriff_min_seats)
         self.sheriff_enabled = ((len(self.seats) >= self.sheriff_min_seats)
                                 if sheriff is None else bool(sheriff))
@@ -713,7 +717,7 @@ class Game:
                 break
             if not getattr(agent, "uses_model", False):
                 break                             # 真人/mock 的失败不是上游问题
-            # ⚠️ 2026-11-03（作者反馈"跑飞"）：第一次烧满单次上限（默认 420s）之后，
+            # ⚠️ 2026-11-03（作者反馈"跑飞"）：第一次烧满单次上限（默认 150s）之后，
             #    整手只剩一点点预算，硬试第二次几乎必失败，纯属让用户多干等几分钟。
             #    剩余预算不够"完整再试一次"（少于单次上限的一半、且不足 60s）时，
             #    直接不再重试，落到下面的"问用户"链路。
@@ -2405,6 +2409,7 @@ class Game:
                 continue
             task = Task(
                 kind="speech",
+                extra={"pk": True},          # ⚠️ 托管别把 PK 辩护任务重拼成"白天轮次发言"（2026-11-04 审查 P2）
                 text=(f"你被投票平票了（{tie_text}），进入 PK 轮。请再发一次言："
                       f"为自己辩护、或指出对手的问题，说服大家别投你。控制在 300 字以内。"),
                 schema=('{"speech": "<你的 PK 发言，300 字以内>", '

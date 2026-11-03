@@ -1,5 +1,5 @@
 # coding=utf-8
-"""把仓库打成一份"国内静态托管"目录：`dist-play/` + `dist/werewolf-play-site.zip`。
+"""把仓库打成一份"国内静态托管"目录：`dist-play/` + `dist/werewolf-<版本>-在线试玩站.zip`。
 
 2026-11-03：之前这份产物是**手工拷进仓库**的（13.9MB 的 wolf/ 副本），
 既占仓库、又会跟主源码漂移。现在改成脚本生成：
@@ -23,9 +23,9 @@ def _site_version() -> str:
     try:
         import json
         with open(os.path.join(ROOT, "web", "site.json"), encoding="utf-8-sig") as fh:
-            return str(json.load(fh).get("version") or "x")
+            return str(json.load(fh).get("version") or "1.0.0")
     except Exception:                                    # noqa: BLE001
-        return "x"
+        return "1.0.0"
 
 
 ZIP = os.path.join(ROOT, "dist", f"werewolf-{_site_version()}-在线试玩站.zip")

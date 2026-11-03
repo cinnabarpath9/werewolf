@@ -25,6 +25,7 @@ reports/ / .git / __pycache__ / 外部审查报告。
 from __future__ import annotations
 
 import argparse
+import glob
 import json
 import os
 import re
@@ -46,7 +47,8 @@ except Exception:                                   # noqa: BLE001
 FILES = (
     "server.py",
     "run_game.py",
-    "config.yaml",
+    # ⚠️ config.yaml **不在**这里：它必须"先清洗、再写进包"（2026-11-04 审查 P1：
+    #    以前先 copy 作者原配置、后清洗，一旦清洗抛异常，dist 里留下带个人阵容的半成品）。
     "requirements.txt",
     "README.md",
     "部署说明.md",
@@ -73,27 +75,11 @@ TOOLS_KEEP = (
     "check_release.py",   # 打包后的复检
 )
 
-#: 打包时要**就地清洗**的内容：(相对路径, [(正则, 替换), ...])
-#: 目的：发布包里不带作者本机/个人信息。源码仓库里保留原样（本机跑得通）。
-SANITIZE: dict[str, list[tuple[str, str]]] = {
-    "config.yaml": [
-        # 作者自己的 https 提示地址（Tailscale 域名），别人装上不该看到
-        (r'(?m)^public_https_base:.*$',
-         'public_https_base: ""          # 留空即可；要提示条就写 .env 的 WOLF_PUBLIC_HTTPS_BASE'),
-        # ⚠️ 2026-11-02（作者拍板）：**发布包不带作者的个人阵容**。
-        #    阵容是作者本机怎么分座位、用哪家模型、什么思考档 —— 那是个人玩的事；
-        #    发出去只留一份「模板 config」，使用者按自己的渠道自己配。
-        (r'(?m)^    profile: QIANFAN_DS.*$',
-         '    profile: DEEPSEEK            # 兜底平台（模板值：用 .env 里的 DEEPSEEK 档案，按你的渠道改）'),
-        (r'(?ms)^  seats:.*?(?=^  # 想换成别的平台)',
-         """  seats: {}
-  # ↑ 发布包**不带任何阵容**：11 个座位全部跟随上面的 llm.default。
-  #   想按座位分模型，在 seats 下加：`1: { profile: 你的档案名, thinking: low }`；
-  #   档案名在 .env 里定义（<档案名>_BASE_URL / <档案名>_API_KEY / <档案名>_MODEL）。
-
-"""),
-    ],
-}
+#: 打包时要**就地清洗**的其它文本文件：(相对路径, [(正则, 替换), ...])
+#: ⚠️ 2026-11-04 审查 P2：`config.yaml` 已改由 `release_rules.sanitize_config()` **结构化清洗**
+#:    （先解析、改结构、再 dump、再解析），不要再往这里加一份正则副本 ——
+#:    以前那份既不执行（循环里 continue），又和"清洗规则只有一份"的承诺矛盾。
+SANITIZE: dict[str, list[tuple[str, str]]] = {}
 
 #: 目录内永远不带的东西
 IGNORE = shutil.ignore_patterns(
@@ -162,6 +148,18 @@ def main() -> int:
         shutil.copy2(src, os.path.join(out, name))
         copied += 1
         print(f"   + {name}")
+    # config.yaml：先清洗 + 断言，通过了才写进 out；失败直接删半成品
+    try:
+        raw_cfg = open(os.path.join(ROOT, "config.yaml"), encoding="utf-8-sig").read()
+        cfg_text, cfg = sanitize_config(raw_cfg)
+        assert_packaged(cfg)
+    except Exception as exc:                            # noqa: BLE001
+        shutil.rmtree(out, ignore_errors=True)
+        print(f"❌ 配置清洗失败，已删除半成品：{type(exc).__name__}: {exc}")
+        return 3
+    open(os.path.join(out, "config.yaml"), "w", encoding="utf-8", newline="\n").write(cfg_text)
+    print(f"   + config.yaml（已清洗，兜底 {(cfg.get('llm') or {}).get('default', {}).get('profile')}）")
+
     for name in DIRS:
         src = os.path.join(ROOT, name)
         if not os.path.isdir(src):
@@ -183,15 +181,6 @@ def main() -> int:
         copied += 1
         print(f"   + {name}/")
 
-    # 就地清洗：config.yaml 走结构化改写 + 断言（2026-11-03 审查 P1-10）
-    cfg_path = os.path.join(out, "config.yaml")
-    if os.path.isfile(cfg_path):
-        raw_cfg = open(cfg_path, encoding="utf-8-sig").read()
-        text, cfg = sanitize_config(raw_cfg)
-        assert_packaged(cfg)                 # 阵容没清干净 → 直接非 0 退出
-        open(cfg_path, "w", encoding="utf-8", newline="\n").write(text)
-        print(f"   ~ 已清洗：config.yaml（seats 清空，兜底 "
-              f"{(cfg.get('llm') or {}).get('default', {}).get('profile')}）")
 
     for rel, rules in SANITIZE.items():
         if rel == "config.yaml":
@@ -243,10 +232,19 @@ def main() -> int:
             return proc.returncode or 1
 
     if args.zip:
-        base = os.path.join(DIST, f"werewolf-{ver}-{flavor_label}")
+        # ⚠️ 2026-11-04 审查 P1：以前固定用 DIST/<名字> 当 base、root_dir=DIST，
+        #    `--out D:\pkg --zip`（文档推荐用法）会打不存在的目录而崩，或静默打成旧内容。
+        base = out
         print(f"\n== 打 zip：{base}.zip ==")
-        shutil.make_archive(base, "zip", root_dir=DIST, base_dir=os.path.basename(out))
+        shutil.make_archive(base, "zip", root_dir=os.path.dirname(base),
+                            base_dir=os.path.basename(base))
         print(f"   {base}.zip")
+        stale = [p for p in glob.glob(os.path.join(DIST, "*.zip"))
+                 if os.path.abspath(p) != os.path.abspath(base + ".zip")]
+        if stale:
+            print("   ⚠️ dist/ 里还有旧 zip（别整目录上传 Release）：")
+            for p in sorted(stale):
+                print(f"      - {os.path.basename(p)}")
 
     print("\n下一步：")
     print("  · 源码仓库（GitHub）推整个仓库即可；.env / settings.local.json / games / 配对码已在 .gitignore")

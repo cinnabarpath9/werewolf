@@ -20,7 +20,7 @@
 ----------
 ERROR（一定不能发布）：.env / 配对码.txt / 联机码.txt / games/ 或 game-*.json / docs/ / tests/ /
         __pycache__ / .git / reports/ / var/ / _junk / 疑似真实密钥
-WARN （建议清掉，不拦）：tools/ / addons/ / *.log / .DS_Store
+WARN （建议清掉，不拦）：addons/ / *.log / .DS_Store / Thumbs.db
 必备（缺了跑不起来）：server.py / run_game.py / config.yaml / web/index.html /
         wolf/__init__.py / content/01_规则书.md
 """
@@ -91,7 +91,7 @@ PERSONAL_PATTERNS = [
 
 #: 疑似真实密钥（占位符 ${X} / xxx / <your-key> 不会命中：它们不是 24+ 位的字母数字串）
 # 2026-11-03 审查 P1-9：规则与清洗端共用一份（tools/release_rules.py）
-from release_rules import KEY_PATTERNS  # noqa: E402
+from release_rules import ALLOWED_DEFAULT_PROFILES, KEY_PATTERNS  # noqa: E402
 
 
 class Result:
@@ -167,7 +167,12 @@ def scan(paths: list[str], read=None) -> Result:
 
     if read is not None:
         for p, lp in low:
-            if os.path.splitext(lp)[1] not in TEXT_EXT:
+            # ⚠️ 2026-11-04 审查 P1：`os.path.splitext(".env.example")` 返回 ('.env', '.example')，
+            #    `.example` 不在 TEXT_EXT → 模板里的密钥**整段跳过扫描**。
+            #    按"文件名以 .env 开头"兜住。
+            _base = os.path.basename(lp)
+            if (os.path.splitext(lp)[1].lower() not in TEXT_EXT
+                    and not _base.startswith(".env")):
                 continue
             text = read(p)
             if not text:
@@ -219,7 +224,8 @@ def main(argv: list[str]) -> int:
         paths = sorted(_norm(n) for n in zf.namelist() if not n.endswith("/"))
 
         def read(rel: str) -> str:
-            if os.path.splitext(rel)[1].lower() not in TEXT_EXT:
+            _b = os.path.basename(rel)
+            if os.path.splitext(rel)[1].lower() not in TEXT_EXT and not _b.startswith(".env"):
                 return ""
             try:
                 info = zf.getinfo(rel)
@@ -262,7 +268,10 @@ def main(argv: list[str]) -> int:
         try:
             if is_zip:
                 with zipfile.ZipFile(target) as z2:
-                    name = next((n for n in z2.namelist() if n.endswith("config.yaml")), None)
+                    # 只认文件名**完全等于** config.yaml 的条目，并取层级最浅的那份
+                    _names = [n for n in z2.namelist()
+                              if n.replace("\\", "/").split("/")[-1] == "config.yaml"]
+                    name = sorted(_names, key=lambda n: n.count("/"))[0] if _names else None
                     if name:
                         cfg_text = z2.read(name).decode("utf-8", "ignore")
             else:
@@ -278,9 +287,13 @@ def main(argv: list[str]) -> int:
             try:
                 import yaml
                 parsed = yaml.safe_load(cfg_text) or {}
-                seats = ((parsed.get("llm") or {}).get("seats")) or {}
+                _llm = parsed.get("llm") or {}
+                seats = _llm.get("seats") or {}
                 if seats:
-                    cfg_problem = f"阵容没清空：{list(seats)[:3]}"
+                    cfg_problem = f"阵容没清空：{list(seats)[:5]}"
+                prof = str((_llm.get("default") or {}).get("profile") or "").upper()
+                if prof and prof not in ALLOWED_DEFAULT_PROFILES:
+                    cfg_problem = f"兜底档案 {prof!r} 不在模板集合 {ALLOWED_DEFAULT_PROFILES}"
             except Exception as exc:                      # noqa: BLE001
                 cfg_problem = f"YAML 解析失败：{type(exc).__name__}: {exc}"
         print(f"  FAIL  {cfg_problem}" if cfg_problem else "  PASS  可解析、阵容为空")

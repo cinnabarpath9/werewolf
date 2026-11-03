@@ -48,6 +48,10 @@ check("1d claim 是「无」/空 → 不落账（本来就没有声称）",
       not claim_allowed("我是好人。", "无") and not claim_allowed("我是好人。", ""))
 check("1e 发言里没提「不跳」但 claim 有值 → 照常落账",
       claim_allowed("我先报身份：我是预言家。", "预言家"))
+check("1f 「本来不想跳…但我必须跳了，我是预言家」→ 照常落账（别误伤）",
+      claim_allowed("本来不想跳的，但我必须跳了：我是预言家，昨晚验的3号查杀。", "预言家"))
+check("1g 引用别人说「不想跳身份」→ 自己 claim 照常落账",
+      claim_allowed("3号说不想跳身份，但我是女巫，昨晚救了2号。", "女巫"))
 
 
 class Scripted:

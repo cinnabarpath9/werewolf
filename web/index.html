@@ -3029,6 +3029,13 @@ function renderHeader() {
     });
   }
   const meRow = $('meRow'); meRow.innerHTML = '';
+  if (!S.you && S.spectate) {
+    const c0 = document.createElement('span');
+    c0.className = 'chip';
+    c0.style.borderColor = 'var(--accent)';
+    c0.textContent = '👁 观战中（全 AI）';
+    meRow.appendChild(c0);
+  }
   if (S.you) {
     const c1 = document.createElement('span');
     c1.className = 'chip'; c1.style.borderColor = 'var(--accent)';
@@ -4250,7 +4257,10 @@ function renderFooter() {
 
   const start = mkBtn('开始新的一局', () => {
     S.entries = []; S.lastDay = null; S.you = null; $('feed').innerHTML = ''; $('thinking').textContent = '';
-    send({ type: 'start', mock: curMock(), human_seat: curSeat(), board: curBoard(), seed: 0 });
+    // ⚠️ 2026-11-04 审查 P1：观战局结束后点「开始新的一局」以前发 human_seat: curSeat()，
+    //   curSeat() 把 0 当 falsy 回落成 1 → 观众静默变成玩家。这里必须保持 0。
+    send({ type: 'start', mock: curMock(), human_seat: S.spectate ? 0 : curSeat(),
+           board: curBoard(), seed: 0 });
   }, 'primary');
   wrap.appendChild(start);
 
