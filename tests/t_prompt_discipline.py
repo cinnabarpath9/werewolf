@@ -140,6 +140,12 @@ async def main() -> int:
           "言行一致" in _sys_prompt and "不跳身份" in _sys_prompt)
     _pb05 = io.open(os.path.join(ROOT, "content", "05_战术书.md"), encoding="utf-8").read()
     check("1j 打法书三条纪律里加了「言行一致」", "言行一致（身份口径" in _pb05)
+    _pb04 = io.open(os.path.join(ROOT, "content", "04_角色书.md"), encoding="utf-8").read()
+    _meta06 = io.open(os.path.join(ROOT, "content", "06_概念库.md"), encoding="utf-8").read()
+    check('1k 打法书写明「邻位出杀后别贴着连验、要隔两格」',
+          "别贴着连验" in _pb04 and "隔两格" in _pb04)
+    check("1l 概念库概率段写明连狼后下一位低于基线",
+          "30.0%" in _meta06 and "22.2%" in _meta06 and "低于基线" in _meta06)
     check("1h 每个发言包里都带时间线提醒",
           all("时间线" in p for p in packets),
           f"{sum('时间线' in p for p in packets)}/{len(packets)}")
