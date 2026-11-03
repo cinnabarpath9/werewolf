@@ -370,6 +370,90 @@ def _first_json_object(cleaned: str) -> dict | None:
         pos = start + 1
 
 
+def _all_json_objects(cleaned: str) -> list:
+    """按出现顺序找出**所有**能解析的 JSON 对象（不只第一个）。
+
+    为什么加：真局里模型会返回 `{"speech":"第一句"},{"speech":"第二句"}`（逗号分隔的
+    两个对象），以前只取第一个 → **后半句整段丢失**，下一位据此误判"他没表态"。
+    """
+    out: list = []
+    pos = 0
+    while True:
+        start = cleaned.find("{", pos)
+        if start < 0:
+            return out
+        end = _match_end(cleaned, start)
+        if end is not None:
+            try:
+                out.append(json.loads(cleaned[start:end]))
+                pos = end
+                continue
+            except Exception:                  # noqa: BLE001 —— 这个 { 不是 JSON 起点
+                pass
+        pos = start + 1
+
+
+def _embedded(text) -> dict | None:
+    """把"内容是 JSON 字符串"的字段解开（`content` / `messages[i].content`）。"""
+    if not isinstance(text, str):
+        return None
+    s = text.strip()
+    if not s:
+        return None
+    try:
+        v = json.loads(s)
+        return v if isinstance(v, dict) else None
+    except Exception:                          # noqa: BLE001
+        return _first_json_object(s)
+
+
+def _unwrap_envelope(obj, depth: int = 0) -> dict:
+    """拆掉会话封套：`{"messages":[…]}` / `{"role":"assistant","content":"{…}"}`。
+
+    为什么加：真局里 8 段发言被包在 `messages` 里、还有 `role/assistant` 封套，
+    以前整段被当成"没有 speech" 而丢掉（或更糟：把提示词当台词）。
+    只认 assistant 的 content；拆不出来就返回空 dict，**绝不把原文当发言**。
+    """
+    if depth > 3 or not isinstance(obj, dict) or not obj:
+        return obj if isinstance(obj, dict) else {}
+    msgs = obj.get("messages")
+    if isinstance(msgs, list):
+        for m in reversed(msgs):
+            if isinstance(m, dict) and str(m.get("role") or "").lower() == "assistant":
+                inner = _embedded(m.get("content"))
+                if inner:
+                    return _unwrap_envelope(inner, depth + 1)
+        return {}
+    role = str(obj.get("role") or "").lower()
+    if role == "assistant":
+        inner = _embedded(obj.get("content"))
+        return _unwrap_envelope(inner, depth + 1) if inner else {}
+    if set(obj) <= {"role", "content"}:
+        inner = _embedded(obj.get("content"))
+        if inner:
+            return _unwrap_envelope(inner, depth + 1)
+    return obj
+
+
+def _merge_objects(objs: list) -> dict:
+    """多个 JSON 值合并成一个回复：`speech` 按顺序拼接，其它字段取第一个非空。"""
+    parts = [x for x in (_unwrap_envelope(o) for o in objs) if isinstance(x, dict) and x]
+    if not parts:
+        return {}
+    merged = dict(parts[0])
+    spoken = [str(p.get("speech") or "").strip() for p in parts]
+    spoken = [s for s in spoken if s]
+    if spoken:
+        merged["speech"] = "\n".join(spoken)
+    for p in parts[1:]:
+        for k, v in p.items():
+            if k == "speech":
+                continue
+            if merged.get(k) in (None, "", [], {}):
+                merged[k] = v
+    return merged
+
+
 #: 整串替换就够了、不会误伤的字符（全角 → 半角）。
 #: ⚠️ 故意**不含** `'`：单引号要靠下面的 `_single_to_double()` 按"是不是定界符"判断，
 #: 直接全局替换会把字符串内部的单引号一起改坏。
@@ -580,9 +664,12 @@ def extract_json(text: str) -> dict:
         candidates.append(fence.group(1).strip())
     candidates.append(raw)
 
-    found = _extract_once(candidates)
-    if found is not None:
-        return found
+    for cleaned in candidates:
+        objs = _all_json_objects(cleaned)
+        if objs:
+            merged = _merge_objects(objs)
+            if merged:
+                return merged
 
     # ①失败 → ②**逐步**修复：每做一步就试解析，取第一个能解析的结果
     # （不做满全套替换 —— 见 _gentle_repair_steps 的注释：叠满会把好文本改坏）

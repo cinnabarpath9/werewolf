@@ -150,7 +150,11 @@ class Ledger:
                     continue
                 lines.append(self.PRIVATE_MARK if kind == "private" else f"[{title}]")
                 for e in items:
-                    who = f"{e.seat}号：" if e.seat is not None else ""
+                    # 2026-11-04：身份声明那类 text 自己就以「5号 声称…」开头，
+                    # 再套一层 who 会变成「5号：5号 声称…」（包里白占字数，也难看）。
+                    who = ""
+                    if e.seat is not None and not str(e.text or "").startswith(f"{e.seat}号"):
+                        who = f"{e.seat}号："
                     lines.append(f"  {who}{e.text}")
         if day == 0:
             lines.append("（对局还没开始）")
