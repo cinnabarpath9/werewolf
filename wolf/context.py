@@ -116,7 +116,8 @@ def build(state, seat, task: Task) -> str:
     dead = state.dead_list()
     parts.append(
         f"【当前阶段】第 {state.day} 天 · {'夜晚' if state.phase == 'night' else '白天'}\n"
-        + state.ledger.render(seat.id, role.camp, alive, dead, state.day)
+        + state.ledger.render(seat.id, role.camp, alive, dead, state.day,
+                              compress=str(getattr(state, "context_compress", "off") or "off"))
     )
 
     # ① 发言顺序 / 时间线（用户 2026-10-07：模型没有"谁先说谁后说"的观念，

@@ -341,6 +341,9 @@ game:
   #   both        = 两边都放（会重复占 token，一般没必要）
   #   off         = 都不放（只有手机上能看）
   # 两种放置方式的实测对比：tools/rules_ab.py
+    # 往日发言压缩（2026-11-04 加）：off = 全文；extract = 只留「身份/技能声明句 + 最后一句」
+  #   数据依据：同类项目真实重放 token −54%、错误不增；**默认先关**，等我们自己 A/B 数据再决定。
+  context_compress: off
   rules_mode: room
   rules_detail: brief       # brief（要点版 ≈650 tokens/次调用）/ full（完整版 ≈1300 tokens）
   stall_timeout: 1800       # 上游连续失败把对局暂停后，等你点按钮的秒数（默认 30 分钟）；

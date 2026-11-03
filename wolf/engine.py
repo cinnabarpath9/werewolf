@@ -300,7 +300,8 @@ class Game:
                  auto_retries: int = 0, retry_backoff: list | None = None,
                  retry_jitter: float = 0.3,
                  carry_reasoning: bool = True, carry_reasoning_chars: int = 300,
-                 decision_first: bool = False) -> None:
+                 decision_first: bool = False,
+        context_compress: str = "off") -> None:
         self.board_def: BoardDef = board if isinstance(board, BoardDef) else make_board(str(board))
         # ⚠️ 在这里就把板子拦下来：坏板子（角色名写错 / 屠边没村民 / 神职全无）
         # 一路放行的话，要么第一天就误判狼胜，要么夜里 KeyError: '村民' 直接崩掉整局。
@@ -428,6 +429,9 @@ class Game:
         # 非竞选者可以投票但**不能发言**；全员上警（或无人上警）则警徽流失；
         # 警徽在投票时算 1.5 票；警长出局（被放逐 / 夜里被刀 / 被枪）时可以选择
         # 把警徽传给一名存活玩家，或者撕掉它。
+        #: 往日发言压缩：off（默认，全文）/ extract（摘录：身份声明 + 最后一句）
+        _cc = str(context_compress or "off").strip().lower()
+        self.context_compress = _cc if _cc in ("off", "extract") else "off"
         self.sheriff_min_seats = int(sheriff_min_seats)
         self.sheriff_enabled = ((len(self.seats) >= self.sheriff_min_seats)
                                 if sheriff is None else bool(sheriff))

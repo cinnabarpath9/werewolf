@@ -111,10 +111,52 @@ class Ledger:
         """该座位能看到的所有记录。"""
         return [e for e in self.entries if e.visible(seat_id, camp)]
 
+    #: 往日发言摘录时**必须保留**的句子标记（身份/技能声明）。只认这些，不认"观点"。
+    SPEECH_KEEP_MARKS = ("我是", "我跳", "我报", "我验", "我查", "金水", "查杀",
+                         "警徽流", "自爆", "守墓", "幸运儿", "女巫", "猎人", "守卫", "摄梦", "预言家")
+
+    @classmethod
+    def compress_speech(cls, text: str, limit: int = 180) -> str:
+        """把**往日**的一条发言压成"身份声明 + 最后一句"（抽取式：只删不改）。
+
+        口径来自同类项目真实重放实验：往日全文占长局 70%~80% 的输入 token，
+        摘录后 token 减半、事实错误不增；**绝不调用模型写摘要**（转述会造新错）。
+        遗言（`【遗言】…`）与今天的发言**不压缩**。
+
+        实现要点：先在每条句子里**截一段以标记词为中心的窗口**（最多 80 字），
+        再拼"最后一句的尾巴" —— 这样即便模型写的是超长流水句（全句只以"。"结尾），
+        身份声明也不会被总长度上限截掉。
+        """
+        s = str(text or "").strip()
+        if not s:
+            return s
+        if s.startswith("【遗言】"):
+            return s
+        if len(s) <= limit:
+            return s
+        parts = [p for p in __import__("re").split(r"(?<=[。！？；\n])", s) if p.strip()]
+
+        def window(part: str, marks: tuple, width: int = 80) -> str:
+            for mark in marks:
+                i = part.find(mark)
+                if i >= 0:
+                    return part[max(0, i - 16): i + width].strip()
+            return ""
+
+        claims = [w for w in (window(p, cls.SPEECH_KEEP_MARKS) for p in parts) if w]
+        last = parts[-1].strip()[-80:] if parts else ""
+        if not claims:                        # 一句身份声明都没有：留开头 + 结尾，别删空
+            claims = [parts[0].strip()[:80]]
+        pieces = claims + ([last] if last and last not in claims else [])
+        out = "".join(pieces).strip()
+        if len(out) > limit * 2:
+            out = out[:limit * 2].rstrip() + "……"
+        return out
+
     def render(self, seat_id: int, camp: str, alive: list[int],
-               dead: list[tuple[int, str]], day: int) -> str:
+               dead: list[tuple[int, str]], day: int, compress: str = "off") -> str:
         """渲染成该座位可见的结构化文本。"""
-        return self._render(self.view(seat_id, camp), alive, dead, day)
+        return self._render(self.view(seat_id, camp), alive, dead, day, compress)
 
     def render_public(self, alive: list[int], dead: list[tuple[int, str]], day: int) -> str:
         """只渲染公开信息（用于对局结束后复盘、以及给观众的记录）。"""
@@ -124,7 +166,7 @@ class Ledger:
     # ---------- 内部 ----------
 
     def _render(self, entries: list[Entry], alive: list[int],
-                dead: list[tuple[int, str]], day: int) -> str:
+                dead: list[tuple[int, str]], day: int, compress: str = "off") -> str:
         from .roles import seats_text
 
         lines: list[str] = []
@@ -150,12 +192,16 @@ class Ledger:
                     continue
                 lines.append(self.PRIVATE_MARK if kind == "private" else f"[{title}]")
                 for e in items:
+                    body = e.text
+                    # 2026-11-04：往日发言按"身份声明 + 最后一句"摘录（开关默认关，见 config）
+                    if compress == "extract" and kind == "speech" and e.day < day:
+                        body = self.compress_speech(body)
                     # 2026-11-04：身份声明那类 text 自己就以「5号 声称…」开头，
                     # 再套一层 who 会变成「5号：5号 声称…」（包里白占字数，也难看）。
                     who = ""
                     if e.seat is not None and not str(e.text or "").startswith(f"{e.seat}号"):
                         who = f"{e.seat}号："
-                    lines.append(f"  {who}{e.text}")
+                    lines.append(f"  {who}{body}")
         if day == 0:
             lines.append("（对局还没开始）")
         return "\n".join(lines)

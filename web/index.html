@@ -897,6 +897,8 @@
     <div class="picker-foot">
       <div class="picker-summary" id="pickerSummary">选一张板子，再决定你坐几号。</div>
       <button class="btn-primary-lg" id="btnConfirmStart" type="button">确认开局</button>
+      <button class="btn-ghost" id="btnSpectate" type="button"
+              title="不坐座位，看一桌全 AI 对局；消耗的是你自己的模型额度">👁 观战（全 AI）</button>
     </div>
   </div>
 </div>
@@ -1585,6 +1587,26 @@ function resetStartButton() {
   clearTimeout(startTimer);
 }
 
+function confirmSpectate() {
+  if (S.status && S.status.running) { showScreen('game'); return; }
+  if (APP.launching) return;
+  const board = selectedBoard();
+  if (!board) { toast('还没读到板子，等连上服务再试', true); return; }
+  const mock = effectiveMock();
+  if (!mock && !hasUsableApi()) { toast('观战真实模型局需要先填自己的 API key；没 key 就用离线演练观战', true); return; }
+  S.pick.board = board.name;
+  S.entries = []; S.lastDay = null; S.you = null; lastEnd = null;
+  S.spectate = true;
+  $('feed').innerHTML = ''; $('thinking').textContent = '';
+  APP.launching = true;
+  const btn = $('btnSpectate');
+  btn.disabled = true; btn.textContent = '正在发牌…';
+  // human_seat: 0 = 空出座位当观众（引擎/服务端都认这个语义）
+  send({ type: 'start', mock, human_seat: 0, board: board.name, seed: 0 });
+  setTimeout(() => { btn.disabled = false; btn.textContent = '👁 观战（全 AI）'; APP.launching = false; }, 4000);
+  toast('观战中：全 AI 对局，消耗的是你自己的模型额度；随时可「放弃本局」');
+}
+
 function confirmStart() {
   if (S.status && S.status.running) { showScreen('game'); return; }
   if (APP.launching) return;
@@ -1598,6 +1620,7 @@ function confirmStart() {
   }
   S.pick.board = board.name;
   S.pick.seat = Math.min(Math.max(1, Number(S.pick.seat) || 1), board.seats);
+  S.spectate = false;
   S.entries = []; S.lastDay = null; S.you = null; lastEnd = null;
   $('feed').innerHTML = ''; $('thinking').textContent = '';
   APP.launching = true;
@@ -2623,6 +2646,7 @@ $('homeStatus').addEventListener('click', (ev) => {
   if (btn.dataset.action === 'room') openRoom();
 });
 $('btnConfirmStart').onclick = confirmStart;
+$('btnSpectate').onclick = confirmSpectate;
 $('pickerMock').onchange = (ev) => { S.pick.mock = !!ev.target.checked; renderPicker(); };
 
 document.querySelectorAll('.tab').forEach(tab => {
@@ -3409,7 +3433,31 @@ function onVoiceEntry(e, replay) {
   if (!S.voice.on) return;
   // 发言：**排队**按顺序念完（用户 2026-10-07 改的规则；以前是"新的一到就掐掉上一条"）
   if (e.say) voiceQueuePush(e);
-  else if (e.kind === 'announce') VOICE.cue(e.kind);
+  else if (e.kind === 'announce') { narratorSay(e.text); VOICE.cue(e.kind); }
+}
+
+// ---------------------------------------------------------------- 法官播报（预录）
+// 2026-11-04：公告是固定台词 → 用一次性 TTS 生成 mp3（tools/make_narrator.py），
+// 这里只按关键词挑一条播放，别再实时调 TTS（省延迟、省钱）。开关记在本机。
+const NARR = { on: lsGet('wolf.narrator') !== '0' };
+function narratorSay(text) {
+  if (!NARR.on) return;
+  const s = String(text || '');
+  let f = '';
+  if (/天黑|闭眼/.test(s)) f = 'night_fall';
+  else if (/天亮|睁眼/.test(s)) f = 'day_break';
+  else if (/平安夜/.test(s)) f = 'peaceful_night';
+  else if (/出局|死亡/.test(s)) f = 'someone_died';
+  else if (/竞选/.test(s)) f = 'badge_election';
+  else if (/平票|PK/.test(s)) f = 'badge_pk';
+  else if (/投票/.test(s)) f = 'vote_start';
+  else if (/对局结束|游戏结束/.test(s)) f = 'game_over';
+  if (!f) return;
+  try {
+    const a = new Audio('audio/narrator/' + f + '.mp3');
+    a.volume = 0.9;
+    a.play().catch(() => {});
+  } catch (e) { /* 播放失败不影响对局 */ }
 }
 
 // ---------------------------------------------------------------- 语音（说）
@@ -3807,6 +3855,7 @@ function showSettlement(st, m) {
 }
 
 function onEnd(m) {
+  S.spectate = false;
   $('thinking').textContent = '';
   lastEnd = { winner: m && m.winner, day: m && m.day, abandoned: !!(m && m.abandoned) };
   const label = m.winner

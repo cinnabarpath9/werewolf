@@ -237,6 +237,8 @@ L2_LOCAL_SERIAL = (
     "t_wolf_king.py",                 # 狼王版（**新默认板子**）：首夜无刀 / 狼王带人 / 结算次序 ~1.5s
     "t_reveal_death.py",              # 新板子：屠城（杀光所有好人才赢）+ 出局亮身份（明牌板）~1s
     "t_roles_v2.py",                  # 守墓人/养鸦人/幸运儿（民牌）+ 愚者改名 + 双层奶穿 ~2s
+    "t_ui_spectate.py",                 # 观战/播报/压缩开关接线 ~0.1s
+    "t_context_compress.py",            # 往日发言摘录：开关/保留句/遗言不压 ~0.3s
     "t_context_invariants.py",          # 过去发言不贴死亡标签 / 候选不滤历史 / 声称≠确认 ~0.4s
     "t_json_shapes.py",                  # 真实坏格式：messages/逗号/封套/私有字段 ~0.1s
     "t_release_config.py",              # 发布包 config 必须能解析（11-04 事故回归）~0.2s

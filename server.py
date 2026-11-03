@@ -1758,6 +1758,8 @@ class Room:
                 #    这里在边界上把 0 归一成 None，引擎那层保留"0 是合法固定种子"给测试用。
                 seed=(int(seed) or None),
                 max_days=int(self.game_cfg.get("max_days", 20)),
+                # 往日发言压缩（2026-11-04）：off = 全文 / extract = 摘录；默认关，配置里改
+                context_compress=str(self.game_cfg.get("context_compress") or "off"),
                 on_event=self.on_event,
                 pk_on_tie=bool(self.game_cfg.get("pk_on_tie", True)),
                 wolf_control=bool(self.game_cfg.get("wolf_control", True)),
