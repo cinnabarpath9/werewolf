@@ -31,6 +31,11 @@ from .roles import (ROLES, WOLF as WOLF_CAMP, BoardDef, make_board, role_name,
 #: 这条由 hunter_shoot(daytime=True) 自己写在公告里，不走这张表。
 #: 发言上限（2026-11-03）：提示词让模型写 350 字，但**硬上限**放宽到 800，
 #: 并且从**句末**截断 —— 以前 `[:600]` 会从半句中间切，模型写超时用户看到的是断句。
+#: 2026-11-03（真局复盘）：模型嘴上说"不跳身份"，却在发言里把身份报了出来、claim 还落了账。
+#: 命中这些说法时，claim 一律不算（发言原话保留，只不记"声称"）。
+NO_CLAIM_MARKS = ("不跳身份", "不报身份", "不亮身份", "先不跳", "暂不跳", "不想跳",
+                  "不跳了", "不能跳身份", "先藏身份")
+
 SPEECH_LIMIT = 800
 
 
@@ -45,6 +50,15 @@ def clip_speech(text: str, limit: int = SPEECH_LIMIT) -> str:
         if idx >= limit // 2:                 # 至少保住一半内容，别切得只剩一句
             return head[:idx + len(sep)] + "……"
     return head + "……"
+
+
+def claim_allowed(speech: str, claim: str) -> bool:
+    """言行一致检查：说了"不跳身份"就别记身份声称（返回 False 时只丢 claim，不动发言原话）。"""
+    c = str(claim or "").strip()
+    if not c or c in ("无", "none", "None", "-", "null"):
+        return False
+    text = str(speech or "")
+    return not any(mark in text for mark in NO_CLAIM_MARKS)
 
 
 CAUSE_TEXT = {
@@ -2134,7 +2148,7 @@ class Game:
             self.ledger.add(day, "day", "speech", speech, seat=seat.id,
                             data={"round": "day"})
 
-            if claim and claim not in ("无", "none", "None", "-", "null"):
+            if claim_allowed(speech, claim):
                 self.ledger.add(day, "day", "claim", f"{seat.id}号 声称自己是【{claim}】。",
                                 seat=seat.id, data={"claim": claim})
 
@@ -2386,7 +2400,7 @@ class Game:
             self.ledger.add(day, "day", "speech", f"【PK】{speech}", seat=seat.id)
             # PK 轮的身份声明与推理也要记账（普通发言会记，这里原来漏了）
             claim = str(reply.get("claim") or "").strip()
-            if claim and claim not in ("无", "none", "None", "-", "null"):
+            if claim_allowed(speech, claim):
                 self.ledger.add(day, "day", "claim", f"{seat.id}号 声称自己是【{claim}】。",
                                 seat=seat.id, data={"claim": claim})
             note = []
@@ -2620,7 +2634,7 @@ class Game:
             return
         self.ledger.add(self.day, "day", "speech", f"【遗言】{clip_speech(speech)}", seat=seat.id)
         claim = str(reply.get("claim") or "").strip()
-        if claim and claim not in ("无", "none", "None", "-", "null"):
+        if claim_allowed(speech, claim):
             self.ledger.add(self.day, "day", "claim",
                             f"{seat.id}号 在遗言里声称自己是【{claim}】。",
                             seat=seat.id, data={"claim": claim})
@@ -3136,7 +3150,7 @@ class Game:
             speech = str(reply.get("speech") or "").strip() or "（我没什么要说的，大家随便投。）"
             self.ledger.add(day, "day", "speech", f"【竞选】{clip_speech(speech)}", seat=seat.id)
             claim = str(reply.get("claim") or "").strip()
-            if claim and claim not in ("无", "none", "None", "-", "null"):
+            if claim_allowed(speech, claim):
                 self.ledger.add(day, "day", "claim",
                                 f"{seat.id}号 在竞选发言里声称自己是【{claim}】。",
                                 seat=seat.id, data={"claim": claim})
@@ -3263,7 +3277,7 @@ class Game:
             speech = str(reply.get("speech") or "").strip() or "（PK 轮我没什么要补的。）"
             self.ledger.add(self.day, "day", "speech", f"【竞选PK】{clip_speech(speech)}", seat=seat.id)
             claim = str(reply.get("claim") or "").strip()
-            if claim and claim not in ("无", "none", "None", "-", "null"):
+            if claim_allowed(speech, claim):
                 self.ledger.add(self.day, "day", "claim",
                                 f"{seat.id}号 在竞选 PK 发言里声称自己是【{claim}】。",
                                 seat=seat.id, data={"claim": claim})

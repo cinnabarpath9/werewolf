@@ -136,6 +136,10 @@ async def main() -> int:
     check("1f 打法书给了固定报验句式（昨晚 + 查杀/金水）",
           "报验句式" in _playbook and "昨晚我验的是" in _playbook)
     check('1g 打法书点明「不能用今天才公开的信息」', "绝不能" in _playbook and "昨晚之前就有" in _playbook)
+    check("1i 系统提示词里有「言行一致（身份口径）」",
+          "言行一致" in _sys_prompt and "不跳身份" in _sys_prompt)
+    _pb05 = io.open(os.path.join(ROOT, "content", "05_战术书.md"), encoding="utf-8").read()
+    check("1j 打法书三条纪律里加了「言行一致」", "言行一致（身份口径" in _pb05)
     check("1h 每个发言包里都带时间线提醒",
           all("时间线" in p for p in packets),
           f"{sum('时间线' in p for p in packets)}/{len(packets)}")

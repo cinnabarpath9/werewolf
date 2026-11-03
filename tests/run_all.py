@@ -241,6 +241,7 @@ L2_LOCAL_SERIAL = (
     "t_butler_prompt.py",               # 托管：发言补强 + 思考档下发（纯函数）~0.2s
     "t_butler_usage.py",                # 托管用量回填进 transcript（model/token/butler 标记）~0.3s
     "t_speech_clip.py",                 # 发言 800 字按句截断 + 托管复用真实 packet ~0.3s
+    "t_claim_consistency.py",           # 言行一致：说不跳身份就不落 claim ~0.3s
     "t_settlement.py",                  # 结算页载荷：座位/身份分布/胜负 ~0.2s
     "t_bgm_audio.py",                   # 默认背景音乐：自研/时长/格式/前端接线 ~0.2s
     "t_wolf_double_explode.py",       # 11 人板新规：狼王禁爆 / 单爆挂起 / 双爆吞警徽 ~0.6s
