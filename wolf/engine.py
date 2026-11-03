@@ -2267,7 +2267,7 @@ class Game:
                                       "_prefetched": True}
             note = "（PK 轮：只能在平票的座位里选）" if candidates else ""
             task = Task(kind="vote",
-                        text=f"第 {day} 天投票{note}：请选出你要放逐的玩家。",
+                        text=f"第 {day} 天投票{note}（**这一票是放逐票，不是警徽票**）：请选出你要放逐的玩家。",
                         schema='{"vote": <玩家编号>, "reason": "<一句话理由>"}',
                         legal=legal, required=("vote",))
             # 养鸦人：诅咒就发生在**放逐投票**这一刻（用户 2026-10-09 改定的时机）。
@@ -3203,7 +3203,8 @@ class Game:
         async def one_vote(voter: Seat):
             legal = [i for i in candidates if i != voter.id] or list(candidates)
             task = Task(kind="sheriff_vote",
-                        text=("投警长（PK 轮：只能在平票的候选人里选）" if pk else "投警长")
+                        text=("**这一票是警徽票**（PK 轮：只能在平票的候选人里选）" if pk
+                              else "**这一票是警徽票**")
                              + "：请从竞选者里选一个你想让他当警长的人。",
                         schema='{"vote": <玩家编号>, "reason": "<一句话理由>"}',
                         legal=legal, required=("vote",))

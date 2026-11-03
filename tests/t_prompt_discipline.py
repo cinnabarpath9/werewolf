@@ -146,6 +146,21 @@ async def main() -> int:
           "别贴着连验" in _pb04 and "隔两格" in _pb04)
     check("1l 概念库概率段写明连狼后下一位低于基线",
           "30.0%" in _meta06 and "22.2%" in _meta06 and "低于基线" in _meta06)
+    _terms07 = io.open(os.path.join(ROOT, "content", "07_术语库.md"), encoding="utf-8").read()
+    _eng = io.open(os.path.join(ROOT, "wolf", "engine.py"), encoding="utf-8").read()
+    check('1m 系统提示词写明票分两种、警徽票只到第 2 天',
+          "警徽票" in _sys_prompt and "放逐票" in _sys_prompt
+          and "第 3 天起不会再有警徽" in _sys_prompt)
+    check('1n 术语库有「警徽票 / 放逐票」两条', "| **警徽票** |" in _terms07 and "| **放逐票** |" in _terms07)
+    check('1o 概念库有「票分两种」小节', "票分两种：警徽票 / 放逐票" in _meta06)
+    check('1r 提示词写明「别把自己说过的票当口误」',
+          "不要把自己先前说过的票当成" in _sys_prompt and "不是矛盾" in _sys_prompt)
+    check('1s 概念库记了 1 号那局的真实例子（警上/警下两句都对）',
+          "两句都对，不是矛盾" in _meta06)
+    check('1p 两种投票任务各自点名是哪种票',
+          "这一票是警徽票" in _eng and "这一票是放逐票" in _eng)
+    check('1q 悍跳章写明「被先手查杀」的应对（别反手查杀，给邻位发牌）',
+          "被先手查杀时的应对" in _pb04 and "反手" in _pb04 and "给邻位发牌" in _pb04)
     check("1h 每个发言包里都带时间线提醒",
           all("时间线" in p for p in packets),
           f"{sum('时间线' in p for p in packets)}/{len(packets)}")
