@@ -61,7 +61,6 @@ tools/bench_thinking.py
 tools/call_structure.py
 tools/check_api.py
 tools/compare_models.py
-tools/context_ab.py
 tools/fill_from_txt.py
 tools/pick_save.py
 tools/project_audit.py

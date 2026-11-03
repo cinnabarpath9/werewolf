@@ -11,7 +11,7 @@
 
 > ☕ **[爱发电 · 感谢赞助](https://afdian.com/a/langrensha)**　·　💬 **[加入 Q 群交流](https://qm.qq.com/q/68VcRJr3Py)**　·　⬇ **[夸克网盘](https://pan.quark.cn/s/00bf04be5c63)** / **[百度网盘](https://pan.baidu.com/s/1WfrytBb-xyHMDLlZUIN9Hw)**（提取码 `vv9n`）
 >
-> 🟢 **[在线试玩（点开即玩，填自己的 key）](https://cinnabarpath9.github.io/werewolf/web/play.html)**　·　**6 人板推荐先试**（5~10 分钟）/ 11 人板是完整流程（20~30 分钟）
+> 🟢 **[在线试玩（点开即玩，填自己的 key）](https://cinnabarpath9.github.io/werewolf/web/play.html)**　·　**6 人板推荐先试**（5~10 分钟）/ 11 人板是完整流程（20~40 分钟，思考档拉满可到 1 小时）
 >
 > ☁️ **[云端一键部署（Render，用自己的 key）](https://render.com/deploy?repo=https://github.com/cinnabarpath9/werewolf)**　·　不想装 Python 就用这个；步骤见 §7
 
@@ -140,7 +140,7 @@
 `web/play.html` 是**零安装试玩页**：页面用 Pyodide 在你自己的浏览器里跑这个项目的**真实规则引擎**，
 模型调用直接打你自己填的 key —— 不需要服务器、不需要注册、也不会占任何人的额度/额度池。
 
-- 两个板子：**6 人明牌板**（推荐试玩，5~10 分钟）/ **11 人狼王板**（完整流程，20~30 分钟，调用明显更慢）；
+- 两个板子：**6 人明牌板**（推荐试玩，5~10 分钟）/ **11 人狼王板**（完整流程，20~40 分钟，思考档拉满可到 1 小时；调用明显更慢）；
 - 先勾「离线演练」可以不填 key 看流程（规则 Bot）；
 - ⚠️ **浏览器直连模型要看渠道允不允许跨域（CORS）**：OpenAI 官方与多数中转可以；
   **火山方舟、千帆通常不允许**（它们要服务端调用），填了会被浏览器拦下。
