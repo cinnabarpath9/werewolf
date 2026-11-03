@@ -709,6 +709,20 @@ class Game:
                 break
             if not getattr(agent, "uses_model", False):
                 break                             # 真人/mock 的失败不是上游问题
+            # ⚠️ 2026-11-03（作者反馈"跑飞"）：第一次烧满单次上限（默认 420s）之后，
+            #    整手只剩一点点预算，硬试第二次几乎必失败，纯属让用户多干等几分钟。
+            #    剩余预算不够"完整再试一次"（少于单次上限的一半、且不足 60s）时，
+            #    直接不再重试，落到下面的"问用户"链路。
+            _cap = float(self.call_timeout or 0)
+            if deadline and _cap > 0:
+                left = deadline - time.time()
+                # "够不够再试一次"的判据：至少要能覆盖一次**有意义的**等待 ——
+                # 取 min(单次上限, 30 秒)，再用 5 秒做地板（单次上限很小的测试场景也要能重试）。
+                if left < max(5.0, min(_cap, 30.0)):
+                    self.emit("warn", seat=seat.id, task_kind=task.kind,
+                              message=f"只剩 {left:.0f} 秒，不够再完整试一次"
+                                      f"（单次上限 {_secs(_cap)} 秒）→ 不再自动重试，直接问你")
+                    break
             wait = self._retry_wait(attempt, deadline)
             if wait is None:
                 self.emit("warn", seat=seat.id, task_kind=task.kind,

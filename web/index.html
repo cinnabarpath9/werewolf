@@ -3923,7 +3923,7 @@ function curMock() { return S.pick.mock === null ? !!S.status.mock : S.pick.mock
 //: "X号 正在思考…" 的计时器：每 5 秒刷新一次已等秒数；超过 90 秒补一句"上游可能卡住了"。
 //  上游挂住时服务端不会有任何事件，只能靠这个本地计时让用户分得清"慢"和"死"。
 //  上限（cap）从服务端的 status 里拿：让用户知道"最多还会等多久"，而不是干等。
-let THINK = { seat: 0, t0: 0, timer: 0, cap: 0, night: false, label: '' };
+let THINK = { seat: 0, t0: 0, timer: 0, cap: 0, night: false, label: '', tries: {} };
 //: 「思考提示」开关（用户 2026-10-07 要的）：关掉之后底部不再显示谁在想。
 //  夜里服务端本来就不发座位号（信息隔离），这个开关是给"我连它在不在想都不想知道"用的。
 let SHOW_THINK = lsGet('wolf_show_think') !== '0';
@@ -3980,9 +3980,13 @@ function startThinkingTimer(seat, label, keepT0) {
     const capTxt = '';
     // 夜里（以及白天的狼专属任务）只说"有人在行动"——点名等于暴露身份
     const who = THINK.label || (seat ? `${seat}号 正在思考` : '夜间行动中');
+    // 2026-11-03（作者反馈"自动重试没生效吗？明显跑飞了"）：把"第几次尝试"写出来，
+    // 否则重试期间只有秒数在涨，看着像没人管。
+    const tries = Number((THINK.tries || {})[THINK.seat] || 0);
+    const tryTxt = tries > 1 ? ` · 第 ${tries} 次尝试` : '';
     $('thinking').textContent = sec >= 90
-      ? `${who}…（已等 ${waited}${capTxt}；到上限会自动判它失败，可点「放弃本局」）`
-      : `${who}…（${waited}）`;
+      ? `${who}…（已等 ${waited}${tryTxt}；到上限会自动判它失败，可点「放弃本局」）`
+      : `${who}…（${waited}${tryTxt}）`;
   };
   paint();
   // ⚠️ 2026-10-10：从 1 秒改成 2 秒 —— 手机上每重绘一次都要重排整页，
@@ -3992,12 +3996,14 @@ function startThinkingTimer(seat, label, keepT0) {
 function stopThinkingTimer() {
   if (THINK.timer) { clearInterval(THINK.timer); THINK.timer = 0; }
   THINK.t0 = 0;      // 想完了：再打开开关不该把上一次的计时补画出来
+  THINK.tries = {};  // 这一手结束：重试计数也清掉
 }
 
 //: 引擎自动重试（第 N/合计 次）：显示"上游失败，X 秒后重试"，并给一个倒计时。
 //  没有这个提示的话，那 3~8 秒的退避看起来就像又卡住了。
 function onAutoRetry(m) {
   const seat = m.seat, n = m.attempt, total = m.total;
+  if (seat) THINK.tries[seat] = n;        // 记住"这一手第几次尝试"，思考行会显示
   const wait = Math.max(0, Math.round(Number(m.wait) || 0));
   const swap = m.switched_to ? `，换 ${m.switched_to} 顶上` : '';
   // ⚠️ 2026-10-30：夜里服务端把 seat 置 null 脱敏；以前前端直接插值，渲染成「null号 上游失败」。
