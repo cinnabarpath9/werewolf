@@ -21,8 +21,11 @@ ALLOWED_DEFAULT_PROFILES = ("DEEPSEEK", "QWEN", "GLM", "ARK", "HAIKU", "MIMO")
 SANITIZE_TEXT: dict[str, list[tuple[str, str]]] = {
     "config.yaml": [
         # 作者自己的 https 提示地址（Tailscale 域名），别人装上不该看到
-        (r"(?m)^\s*public_https_base:.*$",
-         'public_https_base: ""          # 留空即可；要提示条就写 .env 的 WOLF_PUBLIC_HTTPS_BASE'),
+        # ⚠️ 2026-11-04：替换串以前**不带缩进**，打出来的 YAML 从这行起就坏了
+        #    （1.2.15~1.2.18 的包都中招：装上新机器 server 直接 yaml.parser.ParserError）。
+        #    现在用捕获组把原缩进回填，并且 sanitize_config 末尾强制再解析一次。
+        (r"(?m)^(\s*)public_https_base:.*$",
+         r'\1public_https_base: ""      # 留空即可；要提示条就写 .env 的 WOLF_PUBLIC_HTTPS_BASE'),
     ],
 }
 
@@ -72,7 +75,11 @@ def sanitize_config(text: str) -> tuple[str, dict]:
     # 结构化 dump 之后再做文本级清洗（public_https_base 那类）
     for pattern, repl in SANITIZE_TEXT.get("config.yaml", []):
         dumped = re.sub(pattern, repl, dumped)
-    return dumped, cfg
+    # ⚠️ 硬闸门：文本级替换很容易把 YAML 改坏（缩进/引号），这里**必须再解析一次**；
+    #    解析不了就直接报错，别把坏配置打进包里。
+    fixed = _load_yaml(dumped)
+    assert_packaged(fixed)
+    return dumped, fixed
 
 
 def assert_packaged(cfg: dict) -> None:

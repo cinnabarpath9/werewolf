@@ -49,6 +49,14 @@ from wolf.roles import (BUILTIN_BOARDS, ROLES, board_summary, camp_label,  # noq
                         make_board, role_name, validate_board)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+
+def _data_home() -> str:
+    """配对码 / 联机码这类**用户要看的文件**放哪。
+
+    源码运行 = `server.py` 旁边；打包成 exe（launcher 会设 `WOLF_HOME`）= exe 旁边。
+    不这么分的话，冻结后 `__file__` 指向 `_internal` 目录，用户根本找不到 `配对码.txt`。
+    """
+    return os.environ.get("WOLF_HOME") or HERE
 WEB_DIR = os.path.join(HERE, "web")
 
 
@@ -700,7 +708,7 @@ class Room:
         env_code = (os.environ.get("WOLF_PAIR_CODE") or "").strip().upper()
         if _re.fullmatch(r"[A-Z0-9]{6}", env_code):
             return env_code
-        path = os.path.join(HERE, "配对码.txt")
+        path = os.path.join(_data_home(), "配对码.txt")
         try:
             with open(path, encoding="utf-8-sig") as fh:
                 m = _re.search(r"[A-Z0-9]{6}", fh.read())
@@ -724,7 +732,7 @@ class Room:
         极端情况下生成到和配对码一样的串，就再抽一次 —— 否则访客能顺手拿到管理权限。
         """
         import re as _re
-        path = os.path.join(HERE, "联机码.txt")
+        path = os.path.join(_data_home(), "联机码.txt")
         try:
             with open(path, encoding="utf-8-sig") as fh:
                 m = _re.search(r"[A-Z0-9]{6}", fh.read())
@@ -4243,7 +4251,7 @@ async def api_room_rotate(request: Request):
         code = "".join(random.choices("ABCDEFGHJKLMNPQRSTUVWXYZ23456789", k=6))
     ROOM.join_code = code
     try:
-        with open(os.path.join(HERE, "联机码.txt"), "w", encoding="utf-8-sig") as fh:
+        with open(os.path.join(_data_home(), "联机码.txt"), "w", encoding="utf-8-sig") as fh:
             fh.write(JOIN_CODE_TEMPLATE.format(code=code))
     except OSError:
         pass
@@ -4453,7 +4461,7 @@ def main() -> int:
     ROOM = Room(cfg, args.mock_default)
 
     # 配对码同时写到文件里，手机上看不到服务窗口也能拿到
-    code_path = os.path.join(HERE, "配对码.txt")
+    code_path = os.path.join(_data_home(), "配对码.txt")
     try:
         write_token_file(code_path, ROOM.env_token)
     except Exception:                       # noqa: BLE001
@@ -4461,7 +4469,7 @@ def main() -> int:
 
     print(f"服务已起：本机 http://127.0.0.1:{args.port}   手机用 http://<这台电脑的局域网IP>:{args.port}")
     print(f"手机端填 key 的配对码：{ROOM.env_token}   （也写在 {code_path}）")
-    print(f"朋友加入房间的联机码：{ROOM.join_code}   （也写在 {os.path.join(HERE, '联机码.txt')}）")
+    print(f"朋友加入房间的联机码：{ROOM.join_code}   （也写在 {os.path.join(_data_home(), '联机码.txt')}）")
     # 调试/测试用的一行：机器上常常并存好几台实例，而 `配对码.txt` 是**共用**的
     # （每台启动时都会把码写回去）—— 谁最后启动，文件里就是谁的码。
     # 这一行让"到底哪台实例认哪个码"可以直接从日志里对出来，不用猜。

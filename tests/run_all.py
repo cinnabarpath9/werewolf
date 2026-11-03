@@ -237,6 +237,7 @@ L2_LOCAL_SERIAL = (
     "t_wolf_king.py",                 # 狼王版（**新默认板子**）：首夜无刀 / 狼王带人 / 结算次序 ~1.5s
     "t_reveal_death.py",              # 新板子：屠城（杀光所有好人才赢）+ 出局亮身份（明牌板）~1s
     "t_roles_v2.py",                  # 守墓人/养鸦人/幸运儿（民牌）+ 愚者改名 + 双层奶穿 ~2s
+    "t_release_config.py",              # 发布包 config 必须能解析（11-04 事故回归）~0.2s
     "t_review_fixes.py",              # 2026-11-03 审查修复：隔离/清洗/发布规则/题库判分 ~0.5s
     "t_butler_prompt.py",               # 托管：发言补强 + 思考档下发（纯函数）~0.2s
     "t_butler_usage.py",                # 托管用量回填进 transcript（model/token/butler 标记）~0.3s

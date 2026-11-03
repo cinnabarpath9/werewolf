@@ -251,7 +251,41 @@ def main(argv: list[str]) -> int:
     else:
         print(f"  PASS  {len(REQUIRED)} 项都在")
 
-    print("\n[2/2] 不该带出门的东西")
+    # ⚠️ 2026-11-04 事故：清洗把 config.yaml 的缩进弄坏，包能打出来但装上新机器起不来。
+    #    这里对**打好的包**再验一次：配置必须能解析、阵容必须空。
+    print("\n[2/3] config.yaml 能解析")
+    cfg_problem = ""
+    if no_required:
+        print("  SKIP  --no-required")
+    else:
+        cfg_text = None
+        try:
+            if is_zip:
+                with zipfile.ZipFile(target) as z2:
+                    name = next((n for n in z2.namelist() if n.endswith("config.yaml")), None)
+                    if name:
+                        cfg_text = z2.read(name).decode("utf-8", "ignore")
+            else:
+                cfg_path = os.path.join(target, "config.yaml")
+                if os.path.isfile(cfg_path):
+                    with open(cfg_path, encoding="utf-8-sig") as fh:
+                        cfg_text = fh.read()
+        except Exception as exc:                          # noqa: BLE001
+            cfg_problem = f"读不出来：{exc}"
+        if cfg_text is None:
+            cfg_problem = cfg_problem or "包里没有 config.yaml"
+        else:
+            try:
+                import yaml
+                parsed = yaml.safe_load(cfg_text) or {}
+                seats = ((parsed.get("llm") or {}).get("seats")) or {}
+                if seats:
+                    cfg_problem = f"阵容没清空：{list(seats)[:3]}"
+            except Exception as exc:                      # noqa: BLE001
+                cfg_problem = f"YAML 解析失败：{type(exc).__name__}: {exc}"
+        print(f"  FAIL  {cfg_problem}" if cfg_problem else "  PASS  可解析、阵容为空")
+
+    print("\n[3/3] 不该带出门的东西")
     if res.errors:
         print(f"  FAIL  {len(res.errors)} 项违规：")
         for p, why in res.errors[:40]:
@@ -266,7 +300,7 @@ def main(argv: list[str]) -> int:
         for p, why in res.warns[:10]:
             print(f"        - {p}    （{why}）")
 
-    bad = bool(res.errors) or bool(missing)
+    bad = bool(res.errors) or bool(missing) or bool(cfg_problem)
     print()
     if bad and not warn_only:
         print("结论：不能发布 ❌")

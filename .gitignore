@@ -44,4 +44,6 @@ tests/tmp/
 
 # 2026-11-03：静态托管产物由 tools/build_play_site.py 生成，不再进仓库
 dist-play/
+# 桌面客户端产物（52MB+，只发布不上库）
+dist-exe/
 dist/
