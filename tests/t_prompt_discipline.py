@@ -157,6 +157,12 @@ async def main() -> int:
           "不要把自己先前说过的票当成" in _sys_prompt and "不是矛盾" in _sys_prompt)
     check('1s 概念库记了 1 号那局的真实例子（警上/警下两句都对）',
           "两句都对，不是矛盾" in _meta06)
+    _pb05b = io.open(os.path.join(ROOT, "content", "05_战术书.md"), encoding="utf-8").read()
+    check('1t 打法书写了「技能位没人对跳就按真认」',
+          "没人对跳，就按真认" in _pb05b and "跳同一个身份顶掉他" in _pb05b)
+    check('1u 幸运儿章写明狼的两种选择（对跳或认账）',
+          "要么跳同身份顶掉他" in _pb04 or "要么就得认账" in _pb04)
+    check('1v 概念库给了 4、8 双好的例子', "4、8 先当双好" in _meta06 or "4、8" in _meta06)
     check('1p 两种投票任务各自点名是哪种票',
           "这一票是警徽票" in _eng and "这一票是放逐票" in _eng)
     check('1q 悍跳章写明「被先手查杀」的应对（别反手查杀，给邻位发牌）',
