@@ -4313,6 +4313,25 @@ function renderAsk(f, ask) {
   title.textContent = labelMap[ask.kind] || '轮到你行动';
   f.appendChild(title);
 
+  // ── 2026-11-03（作者要求）：**面板能收起来** ──────────────────────────────
+  // 问题：轮到你发言时，这块面板把公示屏挡住，翻不了上面的发言/投票记录。
+  // 做法：标题旁边一个「收起 / 展开」按钮，点一下把标题以外的内容全部隐藏（**不动已输入的文字**，
+  //   展开回来还在），就能先翻记录再回来组织发言。
+  const foldBtn = mkBtn('🗕 收起面板（先翻记录）', () => {}, 'ghost');
+  foldBtn.id = 'askFold';
+  foldBtn.type = 'button';
+  foldBtn.style.margin = '0 0 6px';
+  foldBtn.onclick = () => {
+    const folded = f.dataset.folded === '1';
+    f.dataset.folded = folded ? '0' : '1';
+    for (const el of Array.from(f.children)) {
+      if (el === title || el === foldBtn) continue;
+      el.hidden = !folded;
+    }
+    foldBtn.textContent = folded ? '🗕 收起面板（先翻记录）' : '🗖 展开面板（继续发言）';
+  };
+  f.appendChild(foldBtn);
+
   //: ⚠️ 2026-10-08 加（自查 P2-2）：**这一手还剩多久**必须写在面板上。
   //  服务端 `human_timeout` 到点就按「弃权」处理（默认 900 秒），而以前界面上**全程没有**
   //  任何提示 —— 玩家离开一会儿回来，只看到一条事后的 notice，那一票已经白丢了。
