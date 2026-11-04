@@ -8,12 +8,15 @@
 [![许可](https://img.shields.io/badge/%E8%AE%B8%E5%8F%AF-%E9%9D%9E%E5%95%86%E4%B8%9A%E6%BA%90%E7%A0%81%E5%8F%AF%E8%A7%81-2ea44f?style=flat-square)](LICENSE)
 [![在线试玩](https://img.shields.io/badge/%E5%9C%A8%E7%BA%BF-%E8%AF%95%E7%8E%A9%E5%8D%B3%E7%82%B9%E5%8D%B3%E7%8E%A9-2ea44f?style=flat-square)](https://cinnabarpath9.github.io/werewolf/web/play.html)
 [![云端一键部署](https://img.shields.io/badge/%E4%BA%91%E7%AB%AF-%E4%B8%80%E9%94%AE%E9%83%A8%E7%BD%B2-f97316?style=flat-square)](https://render.com/deploy?repo=https://github.com/cinnabarpath9/werewolf)
+[![itch.io](https://img.shields.io/badge/itch.io-Windows%20%E5%AE%A2%E6%88%B7%E7%AB%AF-fa5c65?style=flat-square)](https://cinnabarpath9.itch.io/ai-werewolf-cn)
 
 > ☕ **[爱发电 · 感谢赞助](https://afdian.com/a/langrensha)**　·　💬 **[加入 Q 群交流](https://qm.qq.com/q/68VcRJr3Py)**　·　⬇ **[夸克网盘](https://pan.quark.cn/s/00bf04be5c63)** / **[百度网盘](https://pan.baidu.com/s/1WfrytBb-xyHMDLlZUIN9Hw)**（提取码 `vv9n`）
 >
 > 🟢 **[在线试玩（点开即玩，填自己的 key）](https://cinnabarpath9.github.io/werewolf/web/play.html)**　·　**6 人板推荐先试**（5~10 分钟）/ 11 人板是完整流程（20~40 分钟，思考档拉满可到 1 小时）
 >
 > ☁️ **[云端一键部署（Render，用自己的 key）](https://render.com/deploy?repo=https://github.com/cinnabarpath9/werewolf)**　·　不想装 Python 就用这个；步骤见 §7
+>
+> 🎮 **[itch.io 下载页（Windows 客户端，免装 Python）](https://cinnabarpath9.itch.io/ai-werewolf-cn)**　·　解压双击 `werewolf.exe`；没 key 可先玩离线演练
 
 服务跑在自己电脑上，手机或电脑浏览器打开就能玩。内置完整规则引擎、信息隔离、语音（AI 发言念出来、
 你也能说话输入）、逐次调用的完整留痕与复盘。没有 API key 也能先用「离线演练」打一局。
