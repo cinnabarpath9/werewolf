@@ -384,6 +384,7 @@ class Game:
         self.carry_reasoning_chars = max(0, int(carry_reasoning_chars or 0))
         # 台账每次新增都会变成一个事件 —— 手机端就是靠这个实时刷新的
         self.audit: list[dict] = []
+        self.faults: list[dict] = []
         self.ledger = Ledger(on_add=lambda entry: self.emit("ledger", entry=entry))
         self.day = 0
         self.phase = "init"
@@ -819,6 +820,7 @@ class Game:
 
         if "_error" in reply:
             seat.private_events.append(f"（系统提示）你这次决策调用失败，已按规则随机处理：{reply['_error']}")
+            self._fault(seat, task, str(reply["_error"]))
             self.emit("warn", seat=seat.id, task_kind=task.kind, message=str(reply["_error"]))
         # ⚠️ 缺必需字段（模型回了合法 JSON 但字段名写错，两次都没补上）也要留痕：
         #    以前只有 review 的 transcript 里能看到 `_still_missing`，引擎当正常回复处理 →
@@ -828,10 +830,20 @@ class Game:
             seat.private_events.append(
                 f"（系统提示）你上次回复缺了必需字段（{miss}），系统按规则补了默认动作，"
                 f"那一手不是你选的。")
+            self._fault(seat, task, f"缺字段：{miss}")
             self.emit("warn", seat=seat.id, task_kind=task.kind, message=f"缺字段：{miss}")
         if _stale():
             raise GameAborted("对局已放弃" if self.aborted else "这一手已作废（对局换代）")
         return reply
+
+    def _fault(self, seat, task, reason: str) -> None:
+        """座位级"这一步没做成"：界面挂 ⚠、复盘可查（借 dsh-game 的 fault 角标）。"""
+        self.faults.append({
+            "day": self.day, "phase": self.phase, "seat": seat.id,
+            "task": task.kind, "reason": str(reason)[:300],
+        })
+        self.emit("fault", seat=seat.id, task_kind=task.kind,
+                  reason=str(reason)[:300], night=(self.phase == "night"))
 
     # ------------------------------------------------------------------ #
     # 夜晚
@@ -3620,6 +3632,7 @@ class Game:
             ]),
             "ledger": snap(self.ledger.to_list()),
             "audit": snap(self.audit),
+            "faults": snap(self.faults),
             "transcript": snap(self.transcript),
             # 三层私密决策（发言前 / 投票前 / 狼队夜里）的最终快照，供复盘：
             #   · 台账里只有「为决策服务的那句发言」，看不到它当时**到底决定投谁、为什么**；

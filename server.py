@@ -1336,6 +1336,7 @@ class Room:
             "call_timeout": self.call_timeout,
             "decision_timeout": self.decision_timeout,
             "has_key": self.has_any_key(),
+        "seats_ready": self._seats_ready(),
             "key_env": str((self.llm_cfg.get("default") or {}).get("api_key_env") or "QWEN_API_KEY"),
             "board": getattr(self, "board_name", self.game_cfg.get("board") or "eleven_wolfking"),
             #: 给前端拼「请用 https 打开」的提示条 —— http 页面里浏览器**不给麦克风 API**、
@@ -1544,6 +1545,22 @@ class Room:
             except Exception:                       # noqa: BLE001
                 continue
             out.append(board_row(key, board, True))
+        return out
+
+    def _seats_ready(self) -> list[dict]:
+        """开局预检（借 dsh-game 的"逐项打勾"）：每个座位用的档案有没有 key。
+
+        只做提示，不拦开局：页面上的「座位分配」可能走 settings.local.json / WOLF_SEAT_PROFILES，
+        这里读的是环境变量这一层；前端用 `ready=false` 标出来，让玩家自己决定。
+        """
+        out: list[dict] = []
+        seats_cfg = self.llm_cfg.get("seats") or {}
+        default = str((self.llm_cfg.get("default") or {}).get("profile") or "")
+        for seat in range(1, 13):
+            block = seats_cfg.get(seat) or {}
+            prof = str(block.get("profile") or routing.seat_profile_overlay(seat) or default)
+            ready = bool(prof and os.environ.get(f"{prof.upper()}_API_KEY"))
+            out.append({"seat": seat, "profile": prof, "ready": ready})
         return out
 
     def has_any_key(self) -> bool:
@@ -2273,6 +2290,12 @@ class Room:
             secret = self._is_night() or str(data.get("task_kind") or "") in self.SECRET_ASK_KINDS
             who = "有人" if secret else f"{data['seat']}号"
             self.broadcast({"type": "notice", "text": f"{who} 调用失败，已按规则随机处理。"})
+        elif event == "fault":
+            # 座位级"这一步没做成"（借 dsh-game 的 ⚠ 角标）：夜里/狼专属任务不点名，别顺带公开身份。
+            secret = self._is_night() or str(data.get("task_kind") or "") in self.SECRET_ASK_KINDS
+            msg = {"type": "fault", "seat": None if secret else data.get("seat"),
+                   "night": bool(secret), "reason": data.get("reason")}
+            self.broadcast(msg)
         elif event == "retry":
             # 引擎层的自动重试（可见退避，见 engine.act）：以前这里**没有分支**，            # `retry` 事件被静默丢掉 —— 前端那条「上游失败，N 秒后自动重试」的提示永远是死的，
             # 手机只能看着"X号 正在思考…"一动不动，分不清它在退避、还是真卡住了。

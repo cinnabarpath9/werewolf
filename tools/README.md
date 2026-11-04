@@ -26,6 +26,7 @@
 | `meta_odds.py` | 发牌/位置概率枚举（`content/06_概念库.md` 里的数字来源） |
 | `verify_isolation.py` | **防全知独立验证器**：对真实 packet 双向核对（泄漏/覆盖缺口），`--mutate` 自证会红；**发版前必跑** |
 | `context_ab.py` | 往日发言压缩的量测（`off` vs `extract` 的字数/token，`--dump` 出两版提示包） |
+| `thinking_ab.py` | **思考强度 A/B**：用真实存档里的 packet 重放，比 off/low/high 的合法率/延迟/字数；`--prepare` 抽局面、`--plan` 看成本、`--run --yes` 才真花钱 |
 
 约定：这些脚本都从 `config.yaml` / `.env` 读配置，**不需要改代码**。
 开发用的题库、基准、参数扫描、一次性探针**不在开源仓库**里；要复现作者当时的实验，得在本机开发环境里跑。

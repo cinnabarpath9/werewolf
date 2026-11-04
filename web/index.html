@@ -1263,6 +1263,7 @@
 const $ = (id) => document.getElementById(id);
 let ws = null, reconnectTimer = null;
 const S = { status: {}, you: null, ask: null, entries: [], lastDay: null,
+  faults: {},          // 座位号 → 本局"没做成"的次数（夜里用 0 记匿名）
             pick: { mock: null, board: null, seat: null },
             voice: { on: false },
             //: 服务端的**权威**状态到了没有（P3 的修复点）。`S.status` 一开始是空对象，
@@ -1576,7 +1577,14 @@ function renderPicker() {
     + ` · ${board.win_rule === 'all' ? '屠城' : '屠边'}`
     + (mock ? ' · <span style="color:var(--good)">离线演练</span>'
             : (warn ? ' · <span class="picker-warn">还缺模型 API</span>'
-                    : ' · <span style="color:var(--good)">真实模型</span>'));
+                    : ' · <span style="color:var(--good)">真实模型</span>'))
+    + (() => {
+        if (mock) return '';
+        const notReady = (S.status.seats_ready || [])
+          .filter(x => !x.ready && x.seat <= board.seats).map(x => x.seat);
+        return notReady.length
+          ? ` · <span class="picker-warn">座位 ${notReady.join('、')} 还没配 key</span>` : '';
+      })();
 }
 
 function resetStartButton() {
@@ -1597,6 +1605,7 @@ function confirmSpectate() {
   S.pick.board = board.name;
   S.entries = []; S.lastDay = null; S.you = null; lastEnd = null;
   S.spectate = true;
+  S.faults = {}; S.faultWhy = {};
   $('feed').innerHTML = ''; $('thinking').textContent = '';
   APP.launching = true;
   const btn = $('btnSpectate');
@@ -1621,6 +1630,7 @@ function confirmStart() {
   S.pick.board = board.name;
   S.pick.seat = Math.min(Math.max(1, Number(S.pick.seat) || 1), board.seats);
   S.spectate = false;
+  S.faults = {}; S.faultWhy = {};
   S.entries = []; S.lastDay = null; S.you = null; lastEnd = null;
   $('feed').innerHTML = ''; $('thinking').textContent = '';
   APP.launching = true;
@@ -2925,6 +2935,13 @@ function handle(m) {
       break;
     case 'phase':   addSys(`${m.day} 天 · ${m.phase === 'night' ? '🌙 夜晚' : '☀️ 白天'}`); renderHeader(); break;
     case 'entry':   stopThinkingTimer(); addEntry(m.entry, m.replay); break;
+    case 'fault': {
+      const key = m.seat || 0;
+      S.faults[key] = (S.faults[key] || 0) + 1;
+      if (m.reason) { (S.faultWhy || (S.faultWhy = {}))[key] = m.reason; }
+      renderHeader();
+      break;
+    }
     // ⚠️ 每条 ask 都带服务端发的**编号**（`ask_id`）；重连时补发的还是同一条（编号不变）。
     //    它随 S.ask 一起留着：确认那一手要原样回传，ask_done 才分得清是哪一条。
     case 'ask':     stopThinkingTimer(); S.ask = m; renderFooter(); flushOutbox(); break;
@@ -3021,14 +3038,26 @@ function renderHeader() {
       const el = document.createElement('span');
       el.className = 'chip ' + (s.alive ? 'alive' : 'dead') + (s.is_human ? ' me' : '');
       const shown = s.alive ? '' : (deadRole[s.id] || '');
+      const fnum = Number((S.faults || {})[s.id] || 0);
       el.textContent = s.id + '号' + (s.name ? ' ' + s.name : '') +
-        (s.is_human ? '(你)' : '') + (shown ? '·' + shown : '');
+        (s.is_human ? '(你)' : '') + (shown ? '·' + shown : '') +
+        (fnum ? ` ⚠${fnum}` : '');
       if (s.name) el.title = `${s.id}号 的角色卡姓名：${s.name}`;
       if (shown) el.title = `${s.id}号 出局时亮出身份：${shown}`;
+      if (fnum) el.title = `${s.id}号 本局有 ${fnum} 步没做成：${(S.faultWhy || {})[s.id] || '模型调用失败，已按规则随机处理'}`;
       seats.appendChild(el);
     });
   }
   const meRow = $('meRow'); meRow.innerHTML = '';
+  const faultTotal = Object.values(S.faults || {}).reduce((a, b) => a + b, 0);
+  if (faultTotal) {
+    const cf = document.createElement('span');
+    cf.className = 'chip';
+    cf.style.borderColor = '#8a5a2a';
+    cf.textContent = `⚠ 本局 ${faultTotal} 步未完成`;
+    cf.title = Object.entries(S.faults || {}).map(([k, v]) => `${k === '0' ? '夜里' : k + '号'} ${v} 次`).join('；');
+    meRow.appendChild(cf);
+  }
   if (!S.you && S.spectate) {
     const c0 = document.createElement('span');
     c0.className = 'chip';
