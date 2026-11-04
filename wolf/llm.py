@@ -688,6 +688,10 @@ def extract_json(text: str) -> dict:
             merged = _merge_objects([found])
             if merged:
                 return merged
+            if found:
+                # 修出来是空对象：按项目口径空 `{}` 就是失败（不是"平衡的 JSON"），
+                # 别落到下面报成 unbalanced —— 文案会误导排查方向。
+                raise LLMError(f"repair produced empty object: {text[:160]!r}")
 
     # 原文（没修过的）用来判错因：这样报错信息跟以前一样，别把修过的文本塞进报错里
     raw = candidates[-1]
@@ -922,7 +926,8 @@ class LLMClient:
         return min(base * (attempt + 1), base * 4)
 
     async def chat_json(self, packet: str, extra: dict | None = None) -> dict:
-        if not self.enabled:
+        # ⚠️ 每次调用现读 env（不只信构造时缓存的 enabled）：测试可能在 Room/客户端建好之后才设闸。
+        if no_real_calls():
             raise LLMError(f"{self.label}: WOLF_NO_REAL_CALLS=1 —— 本进程禁止真模型调用，"
                            f"这一手不会发出任何请求")
         payload: dict = {

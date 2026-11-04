@@ -44,7 +44,7 @@ from wolf import (experience, persona, reports, routing, rules, settings_store, 
                   tabletalk, voice)
 from wolf.agents import LLMAgent, MockAgent, WebHumanAgent  # noqa: E402
 from wolf.engine import CAUSE_TEXT, Game, parse_sheriff_setting, timeouts_from_cfg  # noqa: E402, CAUSE_TEXT
-from wolf.llm import LLMError  # noqa: E402
+from wolf.llm import LLMError, no_real_calls  # noqa: E402
 from wolf.roles import (BUILTIN_BOARDS, ROLES, board_summary, camp_label,  # noqa: E402
                         make_board, role_name, validate_board)
 
@@ -700,8 +700,6 @@ class Room:
         self.lobby_board = self.game_cfg.get("board") or "eleven_wolfking"
         #: 联机局开始后，哪些座位是真人（pid 反查用）。
         self.seat_owner: dict[int, str] = {}
-        #: ws → 连接角色（director_peek 要判断「你是不是主机」）
-        self.ws_role: dict = {}
 
     def _load_or_make_token(self) -> str:
         import re as _re
@@ -868,7 +866,6 @@ class Room:
 
     async def connect(self, ws: WebSocket, role: str = "host", pid: str = "host") -> asyncio.Queue:
         await ws.accept()
-        self.ws_role[ws] = role
         queue: asyncio.Queue = asyncio.Queue(maxsize=500)
         self.clients[ws] = queue
         self.client_info[ws] = {"role": role, "pid": pid}
@@ -880,7 +877,6 @@ class Room:
         return queue
 
     def disconnect(self, ws: WebSocket) -> None:
-        self.ws_role.pop(ws, None)
         info = self.client_info.pop(ws, None) or {}
         self.clients.pop(ws, None)
         self.dropped.pop(ws, None)
@@ -1341,6 +1337,7 @@ class Room:
             "decision_timeout": self.decision_timeout,
             "has_key": self.has_any_key(),
         "seats_ready": self._seats_ready(),
+        "faults": self._faults_summary(host),
         "director": self.director_enabled(),
             "key_env": str((self.llm_cfg.get("default") or {}).get("api_key_env") or "QWEN_API_KEY"),
             "board": getattr(self, "board_name", self.game_cfg.get("board") or "eleven_wolfking"),
@@ -1552,6 +1549,15 @@ class Room:
             out.append(board_row(key, board, True))
         return out
 
+    def _faults_summary(self, host: bool) -> dict:
+        """重连补状态用：fault 是 live-only 事件，刷新后前端要能从 status 恢复角标。"""
+        rows = list(getattr(self.game, "faults", []) or []) if self.game else []
+        seats: dict[str, int] = {}
+        for row in rows:
+            key = str(row.get("seat") or 0)
+            seats[key] = seats.get(key, 0) + 1
+        return {"total": len(rows), "seats": seats if host else {}}
+
     def director_enabled(self) -> bool:
         """导演模式（作弊）：设置里开着、且对局中才允许查身份。默认关。"""
         try:
@@ -1566,12 +1572,20 @@ class Room:
         这里读的是环境变量这一层；前端用 `ready=false` 标出来，让玩家自己决定。
         """
         out: list[dict] = []
-        seats_cfg = self.llm_cfg.get("seats") or {}
+        seats_cfg = self.llm_cfg.get("seats")
+        if not isinstance(seats_cfg, dict):
+            seats_cfg = {}
         default = str((self.llm_cfg.get("default") or {}).get("profile") or "")
-        for seat in range(1, 13):
-            block = seats_cfg.get(seat) or {}
-            prof = str(block.get("profile") or routing.seat_profile_overlay(seat) or default)
-            ready = bool(prof and os.environ.get(f"{prof.upper()}_API_KEY"))
+        limit = int(getattr(settings_store, "MAX_SEATS", 18) or 18)
+        for seat in range(1, limit + 1):
+            block = seats_cfg.get(seat)
+            if block is None:
+                block = seats_cfg.get(str(seat))
+            if not isinstance(block, dict):
+                block = {}
+            # 优先级对齐 routing.resolve：`.env 座位分配 > 座位块 > 角色 > default`
+            prof = str(routing.seat_profile_overlay(seat) or block.get("profile") or default)
+            ready = bool(prof and (os.environ.get(f"{prof.upper()}_API_KEY") or _block_has_key(block)))
             out.append({"seat": seat, "profile": prof, "ready": ready})
         return out
 
@@ -1631,7 +1645,7 @@ class Room:
                 # 审查 P2：`or` 会把合法的 0 当缺省；这里只在"没填"时兜底
                 temperature=(1.0 if _temp is None else float(_temp)),
                 max_tokens=(20000 if _tokens is None else int(_tokens)),
-                timeout=float(getattr(self, "call_timeout", 150) or 150),
+                timeout=float(self.call_timeout),
                 # plain 风格本来就不发任何思考参数，配档位是空转（审查 P2）—— 干脆留空
                 thinking=({} if _style == "plain" else
                           {"speech": {1: "low"}, "decision": {1: "low"}, "aux": {1: "low"}}),
@@ -2256,6 +2270,16 @@ class Room:
         cache[seat_id] = name
         return name
 
+    def _secret_worthy(self, task_kind=None, night_hint: bool = False) -> bool:
+        """夜里 / 狼专属任务的失败事件不点名（借 dsh-game 的 fault 脱敏）。
+
+        三处（warn / retry / fault）共用一份判据 —— 以前各抄一份，fault 就是这么抄漂的。
+        `night_hint` 用引擎 emit 时带的 phase，避免"服务端以为白天、引擎已在夜里"的边界漂移。
+        """
+        return (bool(night_hint)
+                or self._is_night()
+                or str(task_kind or "") in self.SECRET_ASK_KINDS)
+
     def on_event(self, event: str, **data) -> None:
         # 先看"这条事件属于哪一局"（引擎在 emit 里盖的 `_run`）。不是当前这一局 → 直接丢。
         # ⚠️ 不能省：硬复位之后旧任务可能还在跑，它发来的 packet/ledger 会按**新局**的座位
@@ -2298,15 +2322,17 @@ class Room:
             self.broadcast_status()
         elif event == "warn":
             # ⚠️ 2026-10-30：白天也有必须脱敏的任务（狼专属：自爆/夜聊/定刀）。
-            #    判据统一走 `SECRET_ASK_KINDS`，别再只写 `_is_night()`。
-            secret = self._is_night() or str(data.get("task_kind") or "") in self.SECRET_ASK_KINDS
+            #    判据统一走 `_secret_worthy`（见上方）。
+            secret = self._secret_worthy(data.get("task_kind"))
             who = "有人" if secret else f"{data['seat']}号"
             self.broadcast({"type": "notice", "text": f"{who} 调用失败，已按规则随机处理。"})
         elif event == "fault":
-            # 座位级"这一步没做成"（借 dsh-game 的 ⚠ 角标）：夜里/狼专属任务不点名，别顺带公开身份。
-            secret = self._is_night() or str(data.get("task_kind") or "") in self.SECRET_ASK_KINDS
+            # 座位级"这一步没做成"（借 dsh-game 的 ⚠ 角标）：夜里/狼专属任务不点名，
+            # 连 reason 也要脱敏 —— 缺字段名（poison/check_id/take…）本身就能反推角色。
+            secret = self._secret_worthy(data.get("task_kind"), bool(data.get("night")))
             msg = {"type": "fault", "seat": None if secret else data.get("seat"),
-                   "night": bool(secret), "reason": data.get("reason")}
+                   "night": bool(secret),
+                   "reason": ("（夜间/隐藏任务失败，细节已隐藏）" if secret else data.get("reason"))}
             self.broadcast(msg)
         elif event == "retry":
             # 引擎层的自动重试（可见退避，见 engine.act）：以前这里**没有分支**，            # `retry` 事件被静默丢掉 —— 前端那条「上游失败，N 秒后自动重试」的提示永远是死的，
@@ -2315,13 +2341,15 @@ class Room:
                    "attempt": data.get("attempt"), "total": data.get("total"),
                    "wait": data.get("wait"), "why": data.get("why"),
                    "switched_to": data.get("switched_to"), "model": data.get("model")}
-            night = self._is_night()
+            night = self._secret_worthy(data.get("task_kind"))
             if night or str(data.get("task_kind") or "") in self.SECRET_ASK_KINDS:
                 # ⚠️ 夜里的失败者就是那几个有夜间身份的人（狼 / 预言家 / 女巫 / 守卫）；
                 #    白天则是狼专属任务（自爆）。跟 thinking / warn 同一条纪律 ——
-                #    不点名，只说「有人在重试」。
+                #    不点名，只说「有人在重试」；**why/model 也要脱敏**（可能带模型原文/模型名）。
                 msg["seat"] = None
                 msg["night"] = night
+                msg["why"] = "隐藏任务失败，细节已隐藏"
+                msg["model"] = None
             self.broadcast(msg)
 
     def on_human_timeout(self, seat_id: int, ask_id) -> None:
@@ -2343,8 +2371,7 @@ class Room:
     async def handle(self, ws: WebSocket, message: dict) -> None:
         kind = message.get("type")
         if kind == "director_peek":
-            info = self.viewer_info(ws) or {}
-            if info.get("role") != "host":
+            if not self.viewer_is_host(ws):
                 self.send_to(ws, {"type": "error", "text": "只有主机能用导演模式"})
                 return
             if not self.director_enabled():
@@ -3947,7 +3974,12 @@ async def api_settings_director(request: Request):
     if body is None:
         return JSONResponse({"ok": False, "error": "请求格式不对"}, status_code=400)
     data = _local_settings()
-    data["director"] = bool(body.get("on"))
+    raw_on = body.get("on")
+    if isinstance(raw_on, str):
+        on = raw_on.strip().lower() in ("1", "true", "yes", "on")
+    else:
+        on = bool(raw_on)
+    data["director"] = on
     try:
         settings_store.save(HERE, data)
     except OSError as exc:
@@ -4548,7 +4580,7 @@ def main() -> int:
               f"{len(local['apis'])} 个 API、{len(local['seats'])} 个座位、"
               f"语音{'已配' if local['voice'] else '未配'}")
     ROOM = Room(cfg, args.mock_default)
-    if os.environ.get("WOLF_NO_REAL_CALLS", "").strip().lower() in ("1", "true", "yes", "on"):
+    if no_real_calls():
         print("[warn] WOLF_NO_REAL_CALLS=1：本进程**不会发出任何真模型请求**（测试/联调用）")
 
     # 配对码同时写到文件里，手机上看不到服务窗口也能拿到

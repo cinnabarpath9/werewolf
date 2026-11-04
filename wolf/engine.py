@@ -438,6 +438,8 @@ class Game:
         if _cc not in ("off", "extract"):
             self._config_warns.append(
                 f"game.context_compress={context_compress!r} 不认识（只认 off/extract），已按 off 处理")
+        for _warn in self._config_warns:          # 以前只写不读：配置拼错静默降级，日志里也没痕迹
+            print(f"[config-warn] {_warn}")
         self.sheriff_min_seats = int(sheriff_min_seats)
         self.sheriff_enabled = ((len(self.seats) >= self.sheriff_min_seats)
                                 if sheriff is None else bool(sheriff))

@@ -2995,6 +2995,10 @@ function handle(m) {
       // ⚠️ P3 的关键一小步：**这一条来自服务端**，从现在起"在跑 / 没在跑"以它为准。
       //    以前没有这个标记，页面在第一条 status 到达之前就按"没在跑"画了开局面板。
       S.statusKnown = true;
+      if (m.faults && m.faults.seats) {
+        S.faults = {}; S.faultWhy = {};
+        Object.entries(m.faults.seats).forEach(([k, v]) => { S.faults[k] = Number(v) || 0; });
+      }
       // 刷新/切后台回来时，身份牌和狼队友从 status 里补回来（服务端本来就送了）
       if (!S.you && m.your_role) {
         S.you = { seat: m.your_seat || m.human_seat, role: m.your_role,
@@ -3174,7 +3178,8 @@ function renderTable() {
 
   // 投票箭头：只画最近一轮（data.round 最大）
   const votes = (S.entries || []).filter(e => e.kind === 'vote' && e.data
-    && e.data.target != null && !e.data.invalid && at[e.seat] && at[e.data.target]);
+    && e.data.target != null && !e.data.invalid && !e.data.sheriff_vote
+    && at[e.seat] && at[e.data.target]);
   const svg = $('tableArrows');
   if (!votes.length) { svg.innerHTML = ''; return; }
   const maxRound = Math.max(...votes.map(v => Number(v.data.round) || 0));
@@ -3187,7 +3192,7 @@ function renderTable() {
     return `<line x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}" stroke="#b98a3d"
       stroke-width="0.45" stroke-opacity="0.75" marker-end="url(#tsArrow)"></line>`;
   }).join('');
-  $('tableHint').textContent = lines.length ? `${lines.length} 票（第 ${maxRound} 轮）` : '';
+  $('tableHint').textContent = lines.length ? `放逐票 ${lines.length} 张（第 ${maxRound} 轮）` : '';
 }
 
 function renderHeader() {
@@ -4009,8 +4014,11 @@ const DEATH_LABEL = { vote: '放逐', wolf: '夜里出局', poison: '被毒',
   king: '被狼王带走', explode: '自爆', hunter: '被枪带走', dream: '被梦死' };
 
 function showSettlement(st, m) {
+  if (!st || !Array.isArray(st.seats) || !st.seats.length) { S.table.settle = null; renderTable(); return; }
   S.table.settle = st; renderTable();
-  if (!st || !Array.isArray(st.seats) || !st.seats.length) return;   // 旧服务端/空数据：不弹
+  // ⚠️ 结算可能被 sync/重连**再触发一次**：先把手里的牌桌搬回原位，
+  //    否则 remove 旧弹窗会把 tableWrap 一起带走，下面 `wrap.classList` 直接炸。
+  restoreTable();
   document.querySelectorAll('[data-panel="settlement"]').forEach(el => el.remove());
   const box = document.createElement('div');
   box.className = 'toast';
@@ -4033,15 +4041,18 @@ function showSettlement(st, m) {
     + ' / 民 ' + ((st.counts && st.counts.villager) || 0) + '</div>';
   box.appendChild(head);
   // 结算翻牌：牌桌搬进弹窗顶部，免得被弹窗盖住（关掉时 restoreTable 搬回原位）
-  const slot = document.createElement('div');
-  slot.style.margin = '0 0 8px';
   const wrap = $('tableWrap');
-  wrap.classList.add('in-settle');
-  S.table.inModal = true;
-  slot.appendChild(wrap);
-  box.appendChild(slot);
-  setTimeout(renderTable, 0);
+  if (wrap && !S.table.hidden) {
+    const slot = document.createElement('div');
+    slot.style.margin = '0 0 8px';
+    wrap.classList.add('in-settle');
+    S.table.inModal = true;
+    slot.appendChild(wrap);
+    box.appendChild(slot);
+    setTimeout(renderTable, 0);
+  }
 
+  const useGrid = S.table.hidden || !$('tableWrap');
   const grid = document.createElement('div');
   grid.style.display = 'grid';
   grid.style.gridTemplateColumns = 'repeat(auto-fill, minmax(96px, 1fr))';
@@ -4063,9 +4074,9 @@ function showSettlement(st, m) {
       + escapeHtml(s.role) + '</div>' + dead;
     grid.appendChild(card);
   }
-  // 牌桌已经显示身份/死因 → 结算网格整块不挂载（不重复；桌游式翻牌才是主角）
-  // 注：grid 仍构建但不再入 DOM；万一某天没有牌桌，再从 git 里把这一行恢复。
-  void grid;
+  // 牌桌正常 → 不挂网格（身份/死因都在牌上，不重复）；
+  // 牌桌被用户收起 / 节点丢了 → 挂网格兜底，结算不能空着。
+  if (useGrid) box.appendChild(grid);
 
   const row = document.createElement('div');
   row.style.marginTop = '10px';
