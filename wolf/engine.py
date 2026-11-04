@@ -383,6 +383,7 @@ class Game:
         self.carry_reasoning = bool(carry_reasoning)
         self.carry_reasoning_chars = max(0, int(carry_reasoning_chars or 0))
         # 台账每次新增都会变成一个事件 —— 手机端就是靠这个实时刷新的
+        self.audit: list[dict] = []
         self.ledger = Ledger(on_add=lambda entry: self.emit("ledger", entry=entry))
         self.day = 0
         self.phase = "init"
@@ -3364,7 +3365,7 @@ class Game:
     # 出局与胜负
     # ------------------------------------------------------------------ #
 
-    def kill(self, seat_id: int, cause: str) -> None:
+    def kill(self, seat_id: int, cause: str, reason: str = "") -> None:
         seat = self.seat_by_id(seat_id)
         if not seat.alive:
             return
@@ -3373,6 +3374,13 @@ class Game:
         #    而"上一个被放逐的人"只有 `exile()` 知道 —— 见那个函数里的赋值。
         seat.death_day = self.day
         seat.death_cause = cause
+        # 审计（借 DND 的 commit(actor, reason)）：只进存档/复盘，**不发事件、不进任何座位包**。
+        # 不用 ledger.add：每加一条都会 emit("ledger") 推给前端，engine 档也拦不住。
+        self.audit.append({
+            "day": self.day, "phase": self.phase, "seat": seat_id,
+            "kind": "death", "cause": cause,
+            "reason": reason or CAUSE_TEXT.get(cause, cause),
+        })
         seat.private_events.append(f"第 {self.day} 天你出局了（{CAUSE_TEXT.get(cause, cause)}）。")
         # ── 出局亮身份（板子级开关 `reveal_on_death`：目前只有「6 人屠城明牌」开着）──
         # 只亮**身份牌**、照旧不公示死因 —— 所以这条公告和"昨晚出局：X 号（不公布死因）"
@@ -3611,6 +3619,7 @@ class Game:
                 for s in self.seats
             ]),
             "ledger": snap(self.ledger.to_list()),
+            "audit": snap(self.audit),
             "transcript": snap(self.transcript),
             # 三层私密决策（发言前 / 投票前 / 狼队夜里）的最终快照，供复盘：
             #   · 台账里只有「为决策服务的那句发言」，看不到它当时**到底决定投谁、为什么**；
