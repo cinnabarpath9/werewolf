@@ -122,7 +122,36 @@
   #feed .msg{content-visibility:auto;contain-intrinsic-size:120px}
   .clip{border-radius:7px!important}
 
-  /* ── 语音条 ─────────────────────────────────────────────── */
+  /* ── 轻量牌桌（2026-11-05）：座位围一圈 + 投票箭头 + 出局变灰 + 结算翻牌 ── */
+#tableWrap{margin:8px auto 10px;max-width:880px;border:1px solid #2a2f3d;border-radius:14px;
+  background:radial-gradient(ellipse at 50% 45%,#141a28 0%,#0b0e16 70%);padding:6px 8px 8px}
+#tableHead{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--dim);padding:2px 4px 6px}
+#tableHead b{color:#d8c58f;font-size:12px;letter-spacing:.08em}
+#tableStage{position:relative;height:300px}
+#tableArrows{position:absolute;inset:0;width:100%;height:100%;overflow:visible;pointer-events:none}
+.ts-seat{position:absolute;transform:translate(-50%,-50%);width:62px;min-height:46px;
+  border:1px solid #333a4c;border-radius:10px;background:#161c2b;color:#dfe3ee;
+  display:flex;align-items:center;justify-content:center;flex-direction:column;
+  font-size:12px;line-height:1.15;transition:opacity .3s,filter .3s,border-color .2s;
+  transform-style:preserve-3d;cursor:default;z-index:2}
+.ts-seat .ts-no{font-weight:700;font-size:14px;color:#f0e6c8}
+.ts-seat .ts-role{font-size:10px;color:#9aa3b8;margin-top:2px}
+.ts-seat.me{border-color:#c9a45c;box-shadow:0 0 0 1px #c9a45c inset}
+.ts-seat.speaking{border-color:#e3c069;box-shadow:0 0 10px rgba(227,192,105,.55)}
+.ts-seat.dead{opacity:.32;filter:grayscale(1)}
+.ts-seat.sheriff::after{content:"👮";position:absolute;top:-8px;right:-8px;font-size:13px}
+.ts-seat.peek{cursor:pointer}
+.ts-seat.flip{animation:tsflip .45s ease both;border-color:#c9a45c}
+@keyframes tsflip{from{opacity:.35;transform:translate(-50%,-50%) scale(.9)}
+  to{opacity:1;transform:translate(-50%,-50%) scale(1)}}
+.ts-seat .ts-dead{font-size:9px;color:#8b93a8;margin-top:1px;max-width:58px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ts-seat.flip .ts-role{color:#f0d99a;font-weight:700}
+#tableWrap.in-settle{max-width:none;margin:0}
+#tableWrap.in-settle #tableStage{height:250px}
+#tableHint{margin-left:auto;font-size:11px;color:#6f7789}
+
+/* ── 语音条 ─────────────────────────────────────────────── */
   #voicebar{
     width:100%;max-width:920px;margin:0 auto;flex:0 0 auto;display:flex;align-items:center;gap:8px;
     padding:7px 18px;border-top:1px solid var(--line-soft);background:rgba(10,13,20,.7);font-size:13px;
@@ -1248,6 +1277,7 @@
     <div class="top-actions">
       <span class="chip model-chip" id="modelBadge" hidden></span>
       <button class="ghost" id="btnAbandon" type="button" style="display:none">放弃本局</button>
+      <button class="ghost" id="btnTable" type="button">🪑 牌桌</button>
       <button class="ghost" id="btnRules" type="button">规则</button>
       <button class="ghost" id="btnPersona" type="button">人设</button>
       <button class="ghost" id="btnDiag" type="button">自检</button>
@@ -1258,6 +1288,14 @@
   <div class="row" id="seats" style="margin-top:8px"></div>
   <div class="row" id="meRow" style="margin-top:6px"></div>
 </header>
+
+<div id="tableWrap" hidden>
+  <div id="tableHead"><b>牌 桌</b><span id="tableHint"></span></div>
+  <div id="tableStage">
+    <svg id="tableArrows" viewBox="0 0 100 100" preserveAspectRatio="none"></svg>
+    <div id="tableSeats"></div>
+  </div>
+</div>
 
 <div id="feed"></div>
 <div id="thinking"></div>
@@ -1276,6 +1314,8 @@ const $ = (id) => document.getElementById(id);
 let ws = null, reconnectTimer = null;
 const S = { status: {}, you: null, ask: null, entries: [], lastDay: null,
   faults: {},          // 座位号 → 本局"没做成"的次数（夜里用 0 记匿名）
+  knownRoles: {},      // 导演模式点开过的身份（seat → 角色名）
+  table: { hidden: lsGet('wolf.table') === '0', settle: null },
             pick: { mock: null, board: null, seat: null },
             voice: { on: false },
             //: 服务端的**权威**状态到了没有（P3 的修复点）。`S.status` 一开始是空对象，
@@ -1617,7 +1657,7 @@ function confirmSpectate() {
   S.pick.board = board.name;
   S.entries = []; S.lastDay = null; S.you = null; lastEnd = null;
   S.spectate = true;
-  S.faults = {}; S.faultWhy = {};
+  S.faults = {}; S.faultWhy = {}; S.knownRoles = {}; S.table.settle = null;
   $('feed').innerHTML = ''; $('thinking').textContent = '';
   APP.launching = true;
   const btn = $('btnSpectate');
@@ -1642,7 +1682,7 @@ function confirmStart() {
   S.pick.board = board.name;
   S.pick.seat = Math.min(Math.max(1, Number(S.pick.seat) || 1), board.seats);
   S.spectate = false;
-  S.faults = {}; S.faultWhy = {};
+  S.faults = {}; S.faultWhy = {}; S.knownRoles = {}; S.table.settle = null;
   S.entries = []; S.lastDay = null; S.you = null; lastEnd = null;
   $('feed').innerHTML = ''; $('thinking').textContent = '';
   APP.launching = true;
@@ -2983,6 +3023,7 @@ function handle(m) {
     case 'director_seat': {
       if (!m.ok) { toast(m.text || '导演模式不可用', true); break; }
       const camp = m.camp === 'wolf' ? '狼人' : '好人';
+      S.knownRoles[m.seat] = m.role; renderTable();
       toast(`${m.seat}号 身份：${m.role}（${camp}${m.alive ? '，存活' : '，已出局'}）`);
       break;
     }
@@ -3070,6 +3111,85 @@ function showStall(m) {
   document.body.appendChild(box);
 }
 
+// ── 轻量牌桌：座位围圈、投票箭头、出局变灰、结算翻牌（2026-11-05）──
+function tablePositions(n) {
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    const a = (-90 + i * 360 / n) * Math.PI / 180;
+    out.push({ x: 50 + 34 * Math.cos(a), y: 50 + 39 * Math.sin(a) });
+  }
+  return out;
+}
+
+function restoreTable() {
+  const wrap = $('tableWrap');
+  if (!wrap || !S.table.inModal) return;
+  S.table.inModal = false;
+  wrap.classList.remove('in-settle');
+  const home = S.table.home, anchor = S.table.anchor;
+  if (home) home.insertBefore(wrap, anchor || null);
+}
+
+function renderTable() {
+  if (!S.table.settle) restoreTable();
+  const wrap = $('tableWrap');
+  if (!wrap) return;
+  if (!S.table.home) { S.table.home = wrap.parentNode; S.table.anchor = wrap.nextSibling; }
+  const st = S.status || {};
+  const settle = S.table.settle;
+  if ((!st.running && !settle) || S.table.hidden) { wrap.hidden = true; return; }
+  wrap.hidden = false;
+
+  const rows = settle && settle.seats
+    ? settle.seats.map(r => ({ id: r.seat, alive: r.alive, is_human: false, role: r.role,
+                               dead: r.death_text || '' }))
+    : (st.seats || []).map(s => ({ id: s.id, alive: s.alive, is_human: s.is_human,
+                                   role: S.knownRoles[s.id] }));
+  if (!rows.length) { wrap.hidden = true; return; }
+
+  const pos = tablePositions(rows.length);
+  const stage = $('tableSeats');
+  stage.innerHTML = '';
+  const at = {};
+  rows.forEach((r, i) => {
+    at[r.id] = pos[i];
+    const el = document.createElement('div');
+    el.className = 'ts-seat';
+    if (!r.alive) el.classList.add('dead');
+    if (r.is_human) el.classList.add('me');
+    if (Number(st.sheriff) === Number(r.id)) el.classList.add('sheriff');
+    if (THINK && Number(THINK.seat) === Number(r.id)) el.classList.add('speaking');
+    if (r.role) el.dataset.role = r.role;
+    el.style.left = pos[i].x + '%';
+    el.style.top = pos[i].y + '%';
+    el.innerHTML = `<span class="ts-no">${r.id}</span><span class="ts-role">${r.role || ''}</span>`
+      + (r.dead && !r.alive ? `<span class="ts-dead">${escapeHtml(r.dead)}</span>` : '');
+    if (st.running && S.status.director && !MP.guest) {
+      el.classList.add('peek');
+      el.onclick = () => send({ type: 'director_peek', seat: r.id });
+    }
+    stage.appendChild(el);
+    if (settle && r.role) setTimeout(() => el.classList.add('flip'), 80 + i * 60);
+  });
+
+  // 投票箭头：只画最近一轮（data.round 最大）
+  const votes = (S.entries || []).filter(e => e.kind === 'vote' && e.data
+    && e.data.target != null && !e.data.invalid && at[e.seat] && at[e.data.target]);
+  const svg = $('tableArrows');
+  if (!votes.length) { svg.innerHTML = ''; return; }
+  const maxRound = Math.max(...votes.map(v => Number(v.data.round) || 0));
+  const lines = votes.filter(v => (Number(v.data.round) || 0) === maxRound);
+  const defs = `<defs><marker id="tsArrow" viewBox="0 0 10 10" refX="9" refY="5"
+    markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+    <path d="M0,0 L10,5 L0,10 z" fill="#b98a3d"/></marker></defs>`;
+  svg.innerHTML = defs + lines.map(v => {
+    const a = at[v.seat], b = at[v.data.target];
+    return `<line x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}" stroke="#b98a3d"
+      stroke-width="0.45" stroke-opacity="0.75" marker-end="url(#tsArrow)"></line>`;
+  }).join('');
+  $('tableHint').textContent = lines.length ? `${lines.length} 票（第 ${maxRound} 轮）` : '';
+}
+
 function renderHeader() {
   const st = S.status;
   if (st.running) $('title').textContent = `第 ${st.day} 天 · ${st.phase === 'night' ? '夜晚' : '白天'}`;
@@ -3080,6 +3200,7 @@ function renderHeader() {
   $('btnReview').style.display = canAdmin ? '' : 'none';
   if (!st.running) resetAbandonButton();
 
+  renderTable();
   const seats = $('seats'); seats.innerHTML = '';
   if (st.seats) {
     // 出局亮身份的板子（6 人屠城明牌）：服务端在 status.dead[].role 里给亮出来的牌
@@ -3284,6 +3405,7 @@ function askSynth(why, onYes) {
 }
 
 function addEntry(e, replay) {
+  if (e && e.kind === 'vote') setTimeout(renderTable, 0);
   if (e.day !== S.lastDay) { S.lastDay = e.day; addSys(`第 ${e.day} 天`); }
   const meSeat = S.you && S.you.seat;
   const el = document.createElement('div');
@@ -3887,6 +4009,7 @@ const DEATH_LABEL = { vote: '放逐', wolf: '夜里出局', poison: '被毒',
   king: '被狼王带走', explode: '自爆', hunter: '被枪带走', dream: '被梦死' };
 
 function showSettlement(st, m) {
+  S.table.settle = st; renderTable();
   if (!st || !Array.isArray(st.seats) || !st.seats.length) return;   // 旧服务端/空数据：不弹
   document.querySelectorAll('[data-panel="settlement"]').forEach(el => el.remove());
   const box = document.createElement('div');
@@ -3909,6 +4032,15 @@ function showSettlement(st, m) {
     + '　·　狼 ' + ((st.counts && st.counts.wolf) || 0) + ' / 神 ' + ((st.counts && st.counts.god) || 0)
     + ' / 民 ' + ((st.counts && st.counts.villager) || 0) + '</div>';
   box.appendChild(head);
+  // 结算翻牌：牌桌搬进弹窗顶部，免得被弹窗盖住（关掉时 restoreTable 搬回原位）
+  const slot = document.createElement('div');
+  slot.style.margin = '0 0 8px';
+  const wrap = $('tableWrap');
+  wrap.classList.add('in-settle');
+  S.table.inModal = true;
+  slot.appendChild(wrap);
+  box.appendChild(slot);
+  setTimeout(renderTable, 0);
 
   const grid = document.createElement('div');
   grid.style.display = 'grid';
@@ -3931,13 +4063,15 @@ function showSettlement(st, m) {
       + escapeHtml(s.role) + '</div>' + dead;
     grid.appendChild(card);
   }
-  box.appendChild(grid);
+  // 牌桌已经显示身份/死因 → 结算网格整块不挂载（不重复；桌游式翻牌才是主角）
+  // 注：grid 仍构建但不再入 DOM；万一某天没有牌桌，再从 git 里把这一行恢复。
+  void grid;
 
   const row = document.createElement('div');
   row.style.marginTop = '10px';
   const close = document.createElement('button');
   close.className = 'ghost'; close.type = 'button'; close.textContent = '关闭';
-  close.onclick = () => box.remove();
+  close.onclick = () => { restoreTable(); box.remove(); renderTable(); };
   row.appendChild(close);
   if (m && m.save) {
     const name = String(m.save).split(/[\\/]/).pop();
@@ -3945,7 +4079,7 @@ function showSettlement(st, m) {
     rv.className = 'primary'; rv.type = 'button';
     rv.textContent = '看复盘（发言/票型）';
     rv.style.marginLeft = '8px';
-    rv.onclick = () => { box.remove(); openReview(name); };
+    rv.onclick = () => { restoreTable(); box.remove(); renderTable(); openReview(name); };
     row.appendChild(rv);
   }
   box.appendChild(row);
@@ -5707,6 +5841,13 @@ $('btnThink').onclick = () => {
 };
 setShowThink(SHOW_THINK);        // 初始化按钮文字与状态
 $('btnRules').onclick = openRules;
+$('btnTable').onclick = () => {
+  S.table.hidden = !S.table.hidden;
+  lsSet('wolf.table', S.table.hidden ? '0' : '1');
+  renderTable();
+  if (!S.table.hidden) toast(S.status.director ? '牌桌已展开：点座位可看身份（导演模式）' : '牌桌已展开');
+};
+window.addEventListener('resize', () => { if (!$('tableWrap').hidden) renderTable(); });
 
 /* ---------------- 填 API Key / 换平台（写进电脑上的 .env） ---------------- */
 let kProfiles = [];
