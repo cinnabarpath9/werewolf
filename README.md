@@ -17,6 +17,9 @@
 > ☁️ **[云端一键部署（Render，用自己的 key）](https://render.com/deploy?repo=https://github.com/cinnabarpath9/werewolf)**　·　不想装 Python 就用这个；步骤见 §7
 >
 > 🎮 **[itch.io 下载页（Windows 客户端，免装 Python）](https://cinnabarpath9.itch.io/ai-werewolf-cn)**　·　解压双击 `werewolf.exe`；没 key 可先玩离线演练
+>
+> ⚠️ 首次运行若 Windows 弹「已保护你的电脑 / 未知发布者」：点「更多信息」→「仍要运行」
+> （没有代码签名证书的常见提示，不是病毒；不放心可把 exe 传 VirusTotal 自查）
 
 服务跑在自己电脑上，手机或电脑浏览器打开就能玩。内置完整规则引擎、信息隔离、语音（AI 发言念出来、
 你也能说话输入）、逐次调用的完整留痕与复盘。没有 API key 也能先用「离线演练」打一局。
