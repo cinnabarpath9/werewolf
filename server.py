@@ -4462,6 +4462,8 @@ def main() -> int:
               f"{len(local['apis'])} 个 API、{len(local['seats'])} 个座位、"
               f"语音{'已配' if local['voice'] else '未配'}")
     ROOM = Room(cfg, args.mock_default)
+    if os.environ.get("WOLF_NO_REAL_CALLS", "").strip().lower() in ("1", "true", "yes", "on"):
+        print("[warn] WOLF_NO_REAL_CALLS=1：本进程**不会发出任何真模型请求**（测试/联调用）")
 
     # 配对码同时写到文件里，手机上看不到服务窗口也能拿到
     code_path = os.path.join(_data_home(), "配对码.txt")

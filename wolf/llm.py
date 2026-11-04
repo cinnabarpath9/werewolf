@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 from urllib.parse import urlparse
 
@@ -695,6 +696,16 @@ def extract_json(text: str) -> dict:
     raise LLMError(f"unbalanced json in response: {text[:160]!r}")
 
 
+def no_real_calls() -> bool:
+    """进程级"禁止真模型调用"总闸（2026-11-05，借 DND 项目 ModelClient 的做法）。
+
+    为什么要有：测试/联调最怕"以为在离线段、其实在真花钱"。以前只靠每个 Agent 的
+    `uses_model` 约定，不是强制；现在任何真请求都会先撞这面墙。
+    用法：`WOLF_NO_REAL_CALLS=1 python tests/...`
+    """
+    return os.environ.get("WOLF_NO_REAL_CALLS", "").strip().lower() in ("1", "true", "yes", "on")
+
+
 class LLMClient:
     """一个座位一个客户端（可以各自不同的 base_url / key / model）。"""
 
@@ -734,6 +745,8 @@ class LLMClient:
         self.model = model
         self.key = f"{self.host}/{model}"       # 经验存档用：同平台同模型 = 同一个"脑子"
         self.label = label or model
+        #: 只读标志：本进程是否被总闸禁止真调用（测试与状态展示用；真正拦截在请求入口）
+        self.enabled = not no_real_calls()
         self.temperature = temperature
         #: 这个座位的客户端超时（秒）。流式请求会用它构造 per-request 超时：
         #: 总时长仍按它，但「两段数据之间」的等待收到 idle_timeout（见 _post_stream）。
@@ -810,6 +823,8 @@ class LLMClient:
         return params
 
     async def _post_stream(self, payload: dict) -> tuple[str, str, dict]:
+        if not self.enabled:
+            raise LLMError(f"{self.label}: WOLF_NO_REAL_CALLS=1 —— 禁止真调用（流式入口也拦）")
         """流式发一次，返回（正文, 思考链, usage）。
 
         ⚠️ 判"卡住"的判据是**静默**（连续 idle_timeout 秒没有任何 chunk），
@@ -907,6 +922,9 @@ class LLMClient:
         return min(base * (attempt + 1), base * 4)
 
     async def chat_json(self, packet: str, extra: dict | None = None) -> dict:
+        if not self.enabled:
+            raise LLMError(f"{self.label}: WOLF_NO_REAL_CALLS=1 —— 本进程禁止真模型调用，"
+                           f"这一手不会发出任何请求")
         payload: dict = {
             "model": self.model,
             "messages": [

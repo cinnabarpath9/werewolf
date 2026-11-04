@@ -24,6 +24,7 @@
 | `test_routing.py` | 座位路由自检（换模型后确认没配错） |
 | `voice_check.py` | 语音连通性自检 |
 | `meta_odds.py` | 发牌/位置概率枚举（`content/06_概念库.md` 里的数字来源） |
+| `verify_isolation.py` | **防全知独立验证器**：对真实 packet 双向核对（泄漏/覆盖缺口），`--mutate` 自证会红；**发版前必跑** |
 | `context_ab.py` | 往日发言压缩的量测（`off` vs `extract` 的字数/token，`--dump` 出两版提示包） |
 
 约定：这些脚本都从 `config.yaml` / `.env` 读配置，**不需要改代码**。

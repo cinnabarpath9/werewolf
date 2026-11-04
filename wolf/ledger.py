@@ -177,6 +177,7 @@ class Ledger:
         lines.append(f"【存活玩家】{seats_text(alive)}")
         if dead:
             lines.append("【已出局】" + "、".join(f"{i}号（{why}）" for i, why in dead))
+        noted_speech_days: set[int] = set()     # 摘录提示每天只写一次（借 DND「折叠必须写明」）
         for d in sorted({e.day for e in entries}):
             lines.append(f"──── 第 {d} 天 ────")
             block = [e for e in entries if e.day == d]
@@ -195,7 +196,13 @@ class Ledger:
                     body = e.text
                     # 2026-11-04：往日发言按"身份声明 + 最后一句"摘录（开关默认关，见 config）
                     if compress == "extract" and kind == "speech" and e.day < day:
+                        before = body
                         body = self.compress_speech(body)
+                        # ⚠️ 2026-11-05（借 DND P5-B2）：折叠必须写明 —— 否则模型会以为
+                        #    往日发言只有这么短，前面"无事发生"。
+                        if body != before and e.day not in noted_speech_days:
+                            lines.append("  （往日发言已摘录：每段只保留身份/技能声明与最后一句）")
+                            noted_speech_days.add(e.day)
                     # 2026-11-04：身份声明那类 text 自己就以「5号 声称…」开头，
                     # 再套一层 who 会变成「5号：5号 声称…」（包里白占字数，也难看）。
                     who = ""
