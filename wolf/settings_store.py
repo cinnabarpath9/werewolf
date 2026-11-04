@@ -73,7 +73,8 @@ MAX_SEATS = 18              # 与 config.yaml 的 5~18 人自定义板对齐
 
 def empty() -> dict:
     #: `butler` = 托管模型（2026-11-02）：玩家不想自己决策时，调它替玩家出一手。
-    return {"version": 1, "apis": [], "seats": {}, "voice": {}, "butler": {}}
+    #: `director` = 导演模式（作弊开关）：默认关；开了之后在**对局中**点座位才能看身份。
+    return {"version": 1, "apis": [], "seats": {}, "voice": {}, "butler": {}, "director": False}
 
 
 def _text(value, limit: int) -> str:
@@ -179,6 +180,7 @@ def normalize(raw) -> dict:
                 continue
             data["seats"][str(seat)] = pid
     data["voice"] = normalize_voice(raw.get("voice"))
+    data["director"] = bool(raw.get("director"))
     data["butler"] = normalize_butler(raw.get("butler"))
     # 注：这里**不校验 api 是否还在 apis 列表里**（2026-11-03 审查曾建议校验，但撤回）：
     # .env 里的 `<档案名>_BASE_URL` 也是合法档案，而本模块不读 .env；

@@ -700,6 +700,8 @@ class Room:
         self.lobby_board = self.game_cfg.get("board") or "eleven_wolfking"
         #: 联机局开始后，哪些座位是真人（pid 反查用）。
         self.seat_owner: dict[int, str] = {}
+        #: ws → 连接角色（director_peek 要判断「你是不是主机」）
+        self.ws_role: dict = {}
 
     def _load_or_make_token(self) -> str:
         import re as _re
@@ -866,6 +868,7 @@ class Room:
 
     async def connect(self, ws: WebSocket, role: str = "host", pid: str = "host") -> asyncio.Queue:
         await ws.accept()
+        self.ws_role[ws] = role
         queue: asyncio.Queue = asyncio.Queue(maxsize=500)
         self.clients[ws] = queue
         self.client_info[ws] = {"role": role, "pid": pid}
@@ -877,6 +880,7 @@ class Room:
         return queue
 
     def disconnect(self, ws: WebSocket) -> None:
+        self.ws_role.pop(ws, None)
         info = self.client_info.pop(ws, None) or {}
         self.clients.pop(ws, None)
         self.dropped.pop(ws, None)
@@ -1337,6 +1341,7 @@ class Room:
             "decision_timeout": self.decision_timeout,
             "has_key": self.has_any_key(),
         "seats_ready": self._seats_ready(),
+        "director": self.director_enabled(),
             "key_env": str((self.llm_cfg.get("default") or {}).get("api_key_env") or "QWEN_API_KEY"),
             "board": getattr(self, "board_name", self.game_cfg.get("board") or "eleven_wolfking"),
             #: 给前端拼「请用 https 打开」的提示条 —— http 页面里浏览器**不给麦克风 API**、
@@ -1546,6 +1551,13 @@ class Room:
                 continue
             out.append(board_row(key, board, True))
         return out
+
+    def director_enabled(self) -> bool:
+        """导演模式（作弊）：设置里开着、且对局中才允许查身份。默认关。"""
+        try:
+            return bool(settings_store.load(HERE).get("director"))
+        except Exception:                       # noqa: BLE001 —— 设置坏了就当没开
+            return False
 
     def _seats_ready(self) -> list[dict]:
         """开局预检（借 dsh-game 的"逐项打勾"）：每个座位用的档案有没有 key。
@@ -2330,6 +2342,33 @@ class Room:
 
     async def handle(self, ws: WebSocket, message: dict) -> None:
         kind = message.get("type")
+        if kind == "director_peek":
+            info = self.viewer_info(ws) or {}
+            if info.get("role") != "host":
+                self.send_to(ws, {"type": "error", "text": "只有主机能用导演模式"})
+                return
+            if not self.director_enabled():
+                self.send_to(ws, {"type": "director_seat", "ok": False,
+                                  "text": "导演模式没开：先去「设置 → 导演模式」打开"})
+                return
+            if not self.running or self.game is None:
+                self.send_to(ws, {"type": "director_seat", "ok": False, "text": "现在没有进行中的对局"})
+                return
+            try:
+                want = int(message.get("seat") or 0)
+            except (TypeError, ValueError):
+                want = 0
+            seat = next((s for s in self.game.seats if s.id == want), None)
+            if seat is None:
+                self.send_to(ws, {"type": "director_seat", "ok": False, "text": f"没有 {want} 号"})
+                return
+            self.send_to(ws, {
+                "type": "director_seat", "ok": True, "seat": seat.id,
+                "role": role_name(seat.role_key), "camp": seat.camp,
+                "alive": bool(seat.alive),
+            })
+            return
+
         if kind == "start":
             # ⚠️ 2026-10-30：seed 的 int() 以前写在 try 外面 —— 手改报文/老页面发个
             #    非数字 seed 就 ValueError，WS 被静默断开、一条提示都没有。
@@ -3861,6 +3900,7 @@ def _settings_payload(data: dict) -> dict:
         "apis": _api_rows(data),
         "seats": pub["seats"],
         "voice": pub["voice"],
+        "director": bool(data.get("director")),
         "butler": pub.get("butler") or {},
         "token_required": True,
         # ⚠️ 2026-10-31 外部审查 S13：以前这里是**绝对路径**（含中文用户名目录），
@@ -3892,6 +3932,29 @@ def _apply_local_settings(data: dict, note: str = "", clear_missing: bool = Fals
         if note:
             ROOM.broadcast({"type": "notice", "text": note})
         ROOM.broadcast(ROOM.status())
+
+
+@app.post("/api/settings/local/director")
+async def api_settings_director(request: Request):
+    """导演模式开关（作弊）。默认关；开了之后对局中点座位才能看身份。
+
+    只写 settings.local.json（不进 config.yaml、不进发布包）。
+    """
+    denied = _settings_denied(request)
+    if denied is not None:
+        return denied
+    body = await _read_json_body(request)
+    if body is None:
+        return JSONResponse({"ok": False, "error": "请求格式不对"}, status_code=400)
+    data = _local_settings()
+    data["director"] = bool(body.get("on"))
+    try:
+        settings_store.save(HERE, data)
+    except OSError as exc:
+        return JSONResponse({"ok": False, "error": f"存设置失败：{exc}"}, status_code=500)
+    if ROOM is not None:
+        ROOM.broadcast(ROOM.status())
+    return JSONResponse(_settings_payload(data))
 
 
 @app.get("/api/settings/local")

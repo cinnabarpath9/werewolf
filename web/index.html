@@ -1030,6 +1030,18 @@
           <div class="msg" id="bgmMsg"></div>
         </div>
 
+        <div class="card" id="directorCard">
+          <div class="card-head">
+            <b>导演模式（作弊）</b>
+            <span class="sub">默认关 · 开了之后，对局中点座位才能看身份</span>
+          </div>
+          <label class="field" style="display:flex;align-items:center;gap:10px">
+            <input type="checkbox" id="directorToggle" style="width:auto">
+            <span>允许我在对局中查看任意座位的身份（只影响主机自己，不发给别人）</span>
+          </label>
+          <div class="msg" id="directorMsg">关着的时候点座位不会有反应。这是给复盘/直播/自己看真相用的。</div>
+        </div>
+
         <div class="card" id="statsCard">
           <div class="card-head">
             <b>对局统计</b>
@@ -1842,6 +1854,9 @@ function renderSettings() {
     }).join('');
   }
 
+  const dToggle = $('directorToggle');
+  if (dToggle) dToggle.checked = !!SETTINGS.director;
+
   // 座位页
   const options = ['<option value="">跟随 config.yaml</option>']
     .concat(apis.map(apiOptionHtml)).join('');
@@ -2348,6 +2363,36 @@ const BGM = (() => {
   }
 
   return { start, bindUI, setEnabled, setVolume };
+})();
+
+/* ---------------- 导演模式（作弊开关）---------------- */
+/* 只写服务端 settings.local.json；关着时后端不返回任何身份。 */
+(() => {
+  const tg = $('directorToggle');
+  if (!tg) return;
+  tg.onchange = async () => {
+    const msg = $('directorMsg');
+    if (msg) { msg.className = 'msg'; msg.textContent = '保存中…'; }
+    try {
+      const res = await fetch('/api/settings/local/director' + tokenQS(), {
+        method: 'POST',
+        headers: apiHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ on: tg.checked }),
+      });
+      const data = await res.json();
+      if (!data || !data.ok) throw new Error((data && data.error) || '保存失败');
+      SETTINGS.director = !!tg.checked;
+      if (msg) {
+        msg.className = 'msg';
+        msg.textContent = tg.checked
+          ? '已打开：对局中点顶部座位就能看身份（只你自己看得到）'
+          : '已关闭：点座位不会有任何反应';
+      }
+    } catch (err) {
+      if (msg) { msg.className = 'msg bad'; msg.textContent = '保存失败：' + (err && err.message || err); }
+      tg.checked = !!SETTINGS.director;
+    }
+  };
 })();
 
 /* ---------------- 赞助与反馈页 ---------------- */
@@ -2935,6 +2980,12 @@ function handle(m) {
       break;
     case 'phase':   addSys(`${m.day} 天 · ${m.phase === 'night' ? '🌙 夜晚' : '☀️ 白天'}`); renderHeader(); break;
     case 'entry':   stopThinkingTimer(); addEntry(m.entry, m.replay); break;
+    case 'director_seat': {
+      if (!m.ok) { toast(m.text || '导演模式不可用', true); break; }
+      const camp = m.camp === 'wolf' ? '狼人' : '好人';
+      toast(`${m.seat}号 身份：${m.role}（${camp}${m.alive ? '，存活' : '，已出局'}）`);
+      break;
+    }
     case 'fault': {
       const key = m.seat || 0;
       S.faults[key] = (S.faults[key] || 0) + 1;
@@ -3045,10 +3096,21 @@ function renderHeader() {
       if (s.name) el.title = `${s.id}号 的角色卡姓名：${s.name}`;
       if (shown) el.title = `${s.id}号 出局时亮出身份：${shown}`;
       if (fnum) el.title = `${s.id}号 本局有 ${fnum} 步没做成：${(S.faultWhy || {})[s.id] || '模型调用失败，已按规则随机处理'}`;
+      if (st.running && S.status.director && !MP.guest) {
+        el.style.cursor = 'pointer';
+        el.title = `${s.id}号：点一下看身份（导演模式）`;
+        el.onclick = () => send({ type: 'director_peek', seat: s.id });
+      }
       seats.appendChild(el);
     });
   }
   const meRow = $('meRow'); meRow.innerHTML = '';
+  if (st.running && S.status.director && !MP.guest) {
+    const cd = document.createElement('span');
+    cd.className = 'chip'; cd.style.borderColor = '#8a5a2a';
+    cd.textContent = '👁 导演模式：点座位看身份';
+    meRow.appendChild(cd);
+  }
   const faultTotal = Object.values(S.faults || {}).reduce((a, b) => a + b, 0);
   if (faultTotal) {
     const cf = document.createElement('span');
