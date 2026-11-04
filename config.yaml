@@ -1,4 +1,4 @@
-# 狼人杀内核配置
+﻿# 狼人杀内核配置
 #
 # ── 模型地址和 key 在哪？──
 # 都在同目录的 .env 里，一个平台三行（Base URL + Key + 模型名）：
@@ -342,7 +342,8 @@ game:
   #   off         = 都不放（只有手机上能看）
   # 两种放置方式的实测对比：tools/rules_ab.py
     # 往日发言压缩（2026-11-04 加）：off = 全文；extract = 只留「身份/技能声明句 + 最后一句」
-  #   数据依据：同类项目真实重放 token −54%、错误不增；**默认先关**，等我们自己 A/B 数据再决定。
+  #   数据依据：同类项目真实重放 token −54%；我们自己 5 局存档量测只省 **12.4%**（2026-11-04，
+#   tools/context_ab.py）——收益不够抵消漏信息风险，**默认先关**。
   context_compress: off
   rules_mode: room
   rules_detail: brief       # brief（要点版 ≈650 tokens/次调用）/ full（完整版 ≈1300 tokens）
