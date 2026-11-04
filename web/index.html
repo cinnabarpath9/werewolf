@@ -1647,6 +1647,13 @@ function resetStartButton() {
   clearTimeout(startTimer);
 }
 
+// 对局级状态统一重置（第 5 轮外审结构建议）：以前三处各抄一份，新增字段必漏一处。
+function resetMatchState() {
+  S.faults = {}; S.faultWhy = {}; S.knownRoles = {}; S.table.settle = null;
+  S.entries = []; S.lastDay = null; S.you = null; lastEnd = null;
+  $('feed').innerHTML = ''; $('thinking').textContent = '';
+}
+
 function confirmSpectate() {
   if (S.status && S.status.running) { showScreen('game'); return; }
   if (APP.launching) return;
@@ -1655,10 +1662,8 @@ function confirmSpectate() {
   const mock = effectiveMock();
   if (!mock && !hasUsableApi()) { toast('观战真实模型局需要先填自己的 API key；没 key 就用离线演练观战', true); return; }
   S.pick.board = board.name;
-  S.entries = []; S.lastDay = null; S.you = null; lastEnd = null;
+  resetMatchState();
   S.spectate = true;
-  S.faults = {}; S.faultWhy = {}; S.knownRoles = {}; S.table.settle = null;
-  $('feed').innerHTML = ''; $('thinking').textContent = '';
   APP.launching = true;
   const btn = $('btnSpectate');
   btn.disabled = true; btn.textContent = '正在发牌…';
@@ -1682,9 +1687,7 @@ function confirmStart() {
   S.pick.board = board.name;
   S.pick.seat = Math.min(Math.max(1, Number(S.pick.seat) || 1), board.seats);
   S.spectate = false;
-  S.faults = {}; S.faultWhy = {}; S.knownRoles = {}; S.table.settle = null;
-  S.entries = []; S.lastDay = null; S.you = null; lastEnd = null;
-  $('feed').innerHTML = ''; $('thinking').textContent = '';
+  resetMatchState();
   APP.launching = true;
   const btn = $('btnConfirmStart');
   btn.disabled = true;
@@ -4492,7 +4495,7 @@ function renderFooter() {
   wrap.appendChild(seatRow);
 
   const start = mkBtn('开始新的一局', () => {
-    S.entries = []; S.lastDay = null; S.you = null; $('feed').innerHTML = ''; $('thinking').textContent = '';
+    resetMatchState();
     // ⚠️ 2026-11-04 审查 P1：观战局结束后点「开始新的一局」以前发 human_seat: curSeat()，
     //   curSeat() 把 0 当 falsy 回落成 1 → 观众静默变成玩家。这里必须保持 0。
     send({ type: 'start', mock: curMock(), human_seat: S.spectate ? 0 : curSeat(),
