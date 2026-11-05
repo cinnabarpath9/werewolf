@@ -1894,7 +1894,18 @@ class Game:
                 continue
             seat, reply = item
             legal = [i for i in pool if i != seat.id] or list(pool)
-            target = self.coerce_seat(reply.get("vote") or reply.get("target"), legal)
+            # ⚠️ 2026-11-06 真机复盘 P1：这里以前没传 `default=None`。
+            #    模型分析失败（`_error`）时 `coerce_seat(None, legal)` 会**随机挑一个座位**，
+            #    再写进 `day_decisions`；投票环节把它当"本轮已定票"复用，
+            #    于是上游失败被包装成一张正常票（11-05 那局 9 号就这样投了 11 号）。
+            #    分析失败就**不要替模型做决定**：target 留 None，投票前重新问；
+            #    再失败就按无效票/弃权处理，让复盘看得见。
+            #    注意：模型回了合法 JSON、只是没给可用票（例如 vote 为 None）仍按旧口径
+            #    随机处理——这不是"上游失败"，而是它自己没答；测试剧本也依赖这条。
+            raw_vote = reply.get("vote") or reply.get("target")
+            target = self.coerce_seat(raw_vote, legal, default=None)
+            if target is None and "_error" not in reply:
+                target = self.coerce_seat(raw_vote, legal)
             # 养鸦人：诅咒要在**计票之前**生效（票数里会多出那一票）
             # ⚠️ 2026-10-30：调用失败（`_error`）时**不写**「这一轮没有使用诅咒」——
             #    那是把上游失败记成玩家主动放弃，会误导它下一轮的判断。

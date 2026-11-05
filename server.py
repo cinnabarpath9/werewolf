@@ -1094,15 +1094,19 @@ class Room:
     # 玩家这一手不想自己想（或者根本不知道该怎么决策）时，点「托管」：
     # **调用一次**单独配置的托管模型，看玩家自己的 packet（含他自己的发言与全场公示栏），
     # 替玩家出一手，然后当成玩家的答案交给引擎。
-    def butler_client(self, seat_id: int | None = None):
+    def butler_client(self, seat_id: int | None = None, api_name: str | None = None):
         """按「设置 → 模型 API → 托管模型」选的那条 API 建一个客户端。返回 (client, 错误说明)。
 
         2026-11-03 审查 P2：以前固定拿 1 号座位解析画像（多真人房里替别人托管会选错角色画像），
         现在接收真正要托管的座位。
+
+        2026-11-06：`api_name` 允许调用方指定替补档案（托管主模型失败时换家）。
+        托管是"替真人出这一手"，不是主座位决策，所以只给 1 次客户端重试 ——
+        上游卡住时别把 4×25 秒全烧完，交给 `autopilot` 换家。
         """
         local = settings_store.load(HERE)
         cfg_b = local.get("butler") or {}
-        name = str(cfg_b.get("api") or "").strip().upper()
+        name = str(api_name or cfg_b.get("api") or "").strip().upper()
         if not name:
             return None, "还没配托管模型：设置 → 模型 API → 最下面「托管模型」选一条 API"
         game = getattr(self, "game", None)
@@ -1121,6 +1125,7 @@ class Room:
             return None, f"托管模型「{name}」解析失败：{type(exc).__name__}: {exc}"
         if not (spec.base_url and spec.api_key and spec.model):
             return None, f"托管模型「{name}」缺 base_url / key / model，先去设置里补齐"
+        spec.max_retries = min(int(getattr(spec, "max_retries", 1) or 1), 1)
         if cfg_b.get("temperature") is not None:
             try:
                 spec.temperature = float(cfg_b["temperature"])
@@ -1161,10 +1166,6 @@ class Room:
             self.send_to(ws, {"type": "notice", "text": "现在没有等你的行动，托管用不上。"})
             return
         ask_id = pending.get("ask_id")
-        client, err = self.butler_client(seat)
-        if client is None:
-            self.send_to(ws, {"type": "notice", "text": "🤖 " + err})
-            return
         self.send_to(ws, {"type": "notice", "text": "🤖 托管模型正在替你想这一手…"})
         kind = pending.get("kind") or ""
         task = Task(kind=kind, text=pending.get("text") or "",
@@ -1184,18 +1185,72 @@ class Room:
             kind = task.kind
         else:
             packet = butler_mod.augment_packet(pending.get("packet") or "", kind)
-        agent = LLMAgent(client, seat)
-        try:
-            action = await asyncio.wait_for(agent.ask(packet, task), timeout=180)
-        except Exception as exc:                          # noqa: BLE001
+
+        # 2026-11-06 真机复盘 P1：以前只试托管配置的一条 API，失败就把 `_error`
+        # 当成玩家的答案交给引擎（D2 6 号因此变成一张无效票）。
+        # 现在：主档案 → `game.fallback` 里最多两条替补；全失败就**不提交**，
+        # 保留待答让真人自己答，并把失败写进 faults。
+        cfg_b = settings_store.load(HERE).get("butler") or {}
+        primary = str(cfg_b.get("api") or "").strip().upper()
+        if not primary:
             self.send_to(ws, {"type": "notice",
-                              "text": f"🤖 托管失败：{type(exc).__name__}: {exc}（你可以自己决策）"})
+                              "text": "🤖 还没配托管模型：设置 → 模型 API → 最下面「托管模型」选一条 API"})
             return
-        finally:
+        names = [primary]
+        for raw in ((self.cfg.get("game") or {}).get("fallback") or []):
+            name = str(raw or "").strip().upper()
+            if name and name not in names:
+                names.append(name)
+        names = names[:3]
+
+        action = None
+        used_name = ""
+        last_err = ""
+        agent = None
+        for idx, name in enumerate(names):
+            client, err = self.butler_client(seat, name)
+            if client is None:
+                last_err = err
+                continue
+            agent = LLMAgent(client, seat)
             try:
-                await client.aclose()
+                action = await asyncio.wait_for(
+                    agent.ask(packet, task), timeout=150 if idx == 0 else 100)
+            except Exception as exc:                      # noqa: BLE001
+                action = None
+                last_err = f"{type(exc).__name__}: {exc}"
+            finally:
+                try:
+                    await client.aclose()
+                except Exception:                          # noqa: BLE001
+                    pass
+            if action and "_error" not in action:
+                used_name = name
+                break
+            if action and action.get("_error"):
+                last_err = str(action.get("_error") or "空错误")
+            action = None
+            if idx + 1 < len(names):
+                self.send_to(ws, {"type": "notice",
+                                  "text": f"🤖 托管「{name}」没成功，换替补……"})
+        if not action or not used_name:
+            try:
+                self.game.faults.append({
+                    "day": int(getattr(self.game, "day", 0) or 0),
+                    "phase": "day",
+                    "seat": seat,
+                    "task": kind,
+                    "reason": f"托管失败（已试 {len(names)} 个档案）：{last_err[:300]}",
+                })
             except Exception:                              # noqa: BLE001
                 pass
+            self.send_to(ws, {"type": "notice",
+                              "text": f"🤖 托管失败（已试 {len(names)} 个模型）：{last_err[:160]}。"
+                                      f"这一手没提交，你可以自己答，或再点一次托管。"})
+            return
+        if used_name != primary:
+            self.send_to(ws, {"type": "notice",
+                              "text": f"🤖 主托管模型没成功，已用替补「{used_name}」答完这一手。"})
         current = self.pending_asks.get(seat)
         if not current or current.get("ask_id") != ask_id:
             self.send_to(ws, {"type": "notice",
@@ -1211,6 +1266,8 @@ class Room:
             meta = agent.last_meta() or {}
             meta = dict(meta)
             meta["butler"] = True
+            if used_name and used_name != primary:
+                meta["fallback"] = used_name
             meta["packet"] = packet          # 真正发给模型的那份（复盘要看这个，不是人类面板提示）
             seat_obj = self.game.seat_by_id(seat) if self.game else None
             human_agent = getattr(seat_obj, "agent", None) if seat_obj else None

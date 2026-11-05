@@ -1045,5 +1045,9 @@ class LLMClient:
         self.usage["errors"] += 1
         # 把 HTTP 状态码带上（137 行的注释说重试策略要用它；以前 raise 时丢了，
         # 上层只能去字符串里找 "HTTP 401"）
-        raise LLMError(f"{self.label}: {last_error}",
+        # ⚠️ 2026-11-06 真机复盘：`httpx.ReadTimeout` / `RemoteProtocolError` 的
+        #    `str(exc)` 可能是空字符串，存档里只剩 "butler/QIANFAN_DS: "，
+        #    根本看不出是超时还是断流。空消息时至少补异常类名，方便排障。
+        detail = str(last_error) or type(last_error).__name__
+        raise LLMError(f"{self.label}: {detail}",
                        status=getattr(last_error, "status", None))

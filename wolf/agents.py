@@ -321,6 +321,11 @@ class LLMAgent(BaseAgent):
             absorb()
             return {"_error": str(exc)}
         absorb()
+        # 客户端理论上不会把 `_error` 当正常 JSON 返回；但测试桩/中间层可能这么干。
+        # 不在这里拦住的话，下面"缺字段补写"会把 `_error` 当成缺字段，再问一次，
+        # 最后返回一个带 `_repaired` 但没有 `_error` 的字典 —— 失败被伪装成成功。
+        if reply.get("_error"):
+            return {"_error": str(reply.get("_error"))}
 
         # 开了思考的模型偶尔会漏字段（实测 reasoning_effort=high 时丢过 claim/reason）。
         # 缺了就再问一次，而且要求它**整份重写**：之前是"缺什么补什么"，

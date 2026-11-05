@@ -10,14 +10,18 @@
 ## 你需要什么
 
 - 安卓手机（建议 Android 9 以上，4GB 内存以上；6GB 更稳）
-- Termux（**从 F-Droid 装**，不要用应用商店里那个多年没更新的旧版）
+- Termux：**手机包根目录的 `TERMUX-APK/` 已经带了 F-Droid 官方 0.118.3 APK**，先装它；
+  也可以自己去 F-Droid 搜 Termux 装。不要用应用商店里那个多年没更新的旧版
 - 手机和朋友的设备在**同一个 Wi-Fi**（或者都连同一个 Tailscale 网络）
 - 一条能用的模型 API Key（也可以先用「离线演练」不花钱试玩）
 
 ## 安装（一次性，约 3~5 分钟）
 
-1. 装 Termux：打开 F-Droid，搜索 Termux，安装。
-2. 把 `werewolf-android-1.0.0.zip` 传到手机，用文件管理器解压到 Termux 能访问的目录（例如 `Download/werewolf`）。
+1. 装 Termux：在手机文件管理器里打开包内的 `TERMUX-APK/com.termux_1002.apk`，允许「未知来源」安装。
+   如果手机里已经有**应用商店旧版 Termux**，它和官方版签名不同，可能覆盖安装失败；
+   先卸载旧版（旧数据会丢），或者继续用旧版并自己确认能跑 Python。
+   `TERMUX-APK/TERMUX-NOTICE.md` 里有版本、来源、SHA-256 和 GPLv3 说明。
+2. 把 `werewolf-<版本>-手机端.zip` 传到手机，用文件管理器解压到 Termux 能访问的目录（例如 `Download/werewolf`）。
 3. 打开 Termux，先让 Termux 能访问共享存储（只需一次）：
 
    ```bash

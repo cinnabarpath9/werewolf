@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import glob
+import hashlib
 import json
 import os
 import re
@@ -61,6 +62,10 @@ FILES = (
 
 #: 整目录白名单（目录不存在就跳过）
 DIRS = ("wolf", "content", "web", "tools", "assets")
+
+#: 手机包附带官方 Termux APK（2026-11-06 作者要求：少一步去 F-Droid）。
+#: 只附**未修改**的 F-Droid 官方包；GPLv3 的源码/许可证一起放 `TERMUX-APK/`。
+TERMUX_APK_SHA256 = "E6265A57EB5CA363808488E3B01955958BED93BC0C8A0D281849B363B11027EC"
 
 #: `tools/` 是整目录拷贝，但**不是每个工具都该发给玩家**（2026-10-31 打包清洗）：
 #: 考题/基准/参数扫描那一族只在源码仓库里用，发出去既没用、还可能被人当成"官方跑分工具"。
@@ -213,6 +218,32 @@ def main() -> int:
         if os.path.isfile(sp):
             shutil.copy2(sp, os.path.join(out, dst_name))
             print(f"   + {dst_name}（手机部署）")
+
+    # 手机包：附带官方 Termux APK（只在 android 包里带，电脑包不重复塞 108MB）
+    if flavor == "android":
+        vendor = os.path.join(termux, "vendor")
+        apks = sorted(glob.glob(os.path.join(vendor, "*.apk")))
+        if apks:
+            dest = os.path.join(out, "TERMUX-APK")
+            os.makedirs(dest, exist_ok=True)
+            for apk in apks:
+                with open(apk, "rb") as fh:
+                    digest = hashlib.sha256(fh.read()).hexdigest().upper()
+                if os.path.basename(apk) == "com.termux_1002.apk" and digest != TERMUX_APK_SHA256:
+                    print(f"❌ Termux APK 校验失败：{digest}")
+                    return 1
+                shutil.copy2(apk, os.path.join(dest, os.path.basename(apk)))
+            for name in ("TERMUX-NOTICE.md",):
+                src = os.path.join(termux, name)
+                if os.path.isfile(src):
+                    shutil.copy2(src, os.path.join(dest, name))
+            for name in ("TERMUX-LICENSE.txt", "GPL-3.0.txt"):
+                src = os.path.join(vendor, name)
+                if os.path.isfile(src):
+                    shutil.copy2(src, os.path.join(dest, name))
+            print(f"   + TERMUX-APK/（官方 Termux {len(apks)} 个 APK + 许可证）")
+        else:
+            print("   ⚠️ 手机包没带 Termux APK：deploy/termux/vendor/*.apk 不存在")
 
     # 必备文件自检（check_release 也会查，但先给一句更直白的话）
     missing = [p for p in ("server.py", "run_game.py", "config.yaml",
