@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
@@ -595,7 +595,18 @@
   .bulk-row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:14px}
   .bulk-row select{flex:1 1 220px;min-width:0}
   .bulk-row button{flex:0 0 auto}
-  .settings-foot-note{margin-top:16px;color:#565e70;font-size:11.5px;line-height:1.7}
+  .persona-warn{border-color:#b8860b55;background:#b8860b0d}
+.persona-warn p{margin:6px 0 0;font-size:13px;line-height:1.6;color:var(--muted,#888)}
+.persona-grid{display:grid;gap:10px;margin-top:12px}
+.persona-card{border:1px solid #8884;border-radius:10px;padding:10px 12px}
+.persona-card summary{cursor:pointer;font-weight:600;font-size:14px}
+.persona-fields{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px}
+.persona-fields .field{margin-top:0}
+.persona-fields .field.persona-wide{grid-column:1 / -1}
+.persona-total{font-size:12px;color:#888;margin-top:6px}
+.persona-card.bad{border-color:#c0392b88}
+
+.settings-foot-note{margin-top:16px;color:#565e70;font-size:11.5px;line-height:1.7}
 
   /* ── 联机：加入 / 房间 ─────────────────────────────────── */
   .home-text-link{
@@ -952,6 +963,7 @@
       <button class="tab on" type="button" data-tab="models" role="tab">模型 API</button>
       <button class="tab" type="button" data-tab="seats" role="tab">座位分配</button>
       <button class="tab" type="button" data-tab="voice" role="tab">语音</button>
+      <button class="tab" type="button" data-tab="persona" role="tab">人设</button>
     </nav>
 
     <div class="settings-body">
@@ -1147,6 +1159,44 @@
         <div class="settings-foot-note">
           语音只用在一个地方：AI 发言转语音、你的麦克风转文字。不配也能完整玩文字局。
           麦克风需要 <strong>https</strong> 或 <strong>localhost</strong> 页面，否则浏览器不给权限。
+        </div>
+      </section>
+
+      <!-- ④ 人设（可选，默认关） -->
+      <section class="pane" data-pane="persona">
+        <div class="pane-head">
+          <div>
+            <h3>人设（可选）</h3>
+            <p>给每个座位写身份、性格、经历、说话风格；<strong>默认关，关着完全不影响竞技配置</strong>。</p>
+          </div>
+          <span class="badge" id="personaBadge">关闭</span>
+        </div>
+
+        <div class="card persona-warn">
+          <b>⚠️ 开之前先读：人设会影响模型的判断倾向，可能降低竞技强度。</b>
+          <p>人设只改变“怎么说话、怎么待人”，不改变规则，也不给任何额外身份信息；
+             但性格/关系/打法写得越具体，模型越可能按人设做选择，而不是按最优胜率。</p>
+          <p><b>成本：</b>人设文字会进该座位每次调用的提示包——写得越多，token 越多、越贵。
+             11 人局一个座位一局大约 20~40 次调用，每个座位每多 100 字，全局大约多几千 token。
+             竞技请保持关闭；只想看沉浸感再开。</p>
+        </div>
+
+        <div class="card">
+          <label class="switch-row">
+            <input type="checkbox" id="personaOn">
+            <span><b>开启人设模块</b>（保存后<strong>下一局</strong>生效；只影响勾选开启后的对局）</span>
+          </label>
+          <div class="persona-grid" id="personaSeats"></div>
+          <div class="form-actions">
+            <button class="primary" id="personaSave" type="button">保存人设</button>
+          </div>
+          <div class="msg" id="personaMsg"></div>
+        </div>
+
+        <div class="settings-foot-note">
+          每个座位只影响自己：3 号的人设不会进 4 号的包，也不会给模型任何身份线索。
+          写“狼人 / 预言家 / 金水 / 查杀 / 队友”这类身份词会被拒绝保存——那等于给信息隔离开后门。
+          不写人设的座位保持原样。
         </div>
       </section>
     </div>
@@ -1793,7 +1843,7 @@ async function openSettings(tab) {
   }
   showScreen('settings');
   selectTab(tab || 'models');
-  if (SETTINGS.loaded) { renderSettings(); return; }
+  if (SETTINGS.loaded) { renderSettings(); renderPersona(); return; }
   $('apiList').innerHTML = '<div class="empty">读取中…</div>';
   try {
     const res = await fetch('/api/settings/local' + tokenQS(), { headers: apiHeaders() });
@@ -1812,9 +1862,11 @@ async function openSettings(tab) {
     SETTINGS.seats = data.seats || {};
     SETTINGS.voice = data.voice || {};
     SETTINGS.butler = data.butler || {};
+    SETTINGS.persona = data.persona || { enabled: false, seats: {} };
     SETTINGS.loaded = true;
     renderSettings();
     renderButler();
+    renderPersona();
   } catch (err) {
     $('apiList').innerHTML = '<div class="empty">读取失败（网络不通）</div>';
   }
@@ -1851,6 +1903,102 @@ async function saveButler() {
     SETTINGS.butler = data.butler || {};
     box.className = 'msg';
     box.textContent = api ? '已保存：托管会用这条 API。' : '已关闭托管。';
+  } catch (err) {
+    box.className = 'msg bad'; box.textContent = '保存失败：' + ((err && err.message) || err);
+  }
+}
+
+const PERSONA_FIELDS = [
+  ['name', '姓名', '例如：沈倩宁'],
+  ['age', '年龄', '例如：24'],
+  ['job', '职业', '例如：花店老板（别写角色名）'],
+  ['traits', '性格', '例如：嘴硬心软、急了会结巴'],
+  ['background', '经历', '例如：在外地读了四年书，刚回来'],
+  ['relations', '和其他座位的关系', '每行一条，例如：\n3号是我师妹\n7号我不太信'],
+  ['style', '说话风格', '例如：句子短、爱反问、很少用敬语'],
+];
+
+function personaSeatCount() {
+  const b = typeof selectedBoard === 'function' ? selectedBoard() : null;
+  return (b && b.seats) || 11;
+}
+
+function personaCardHtml(seat, data) {
+  const d = data || {};
+  const fields = PERSONA_FIELDS.map(([key, label, ph]) => {
+    const wide = (key === 'background' || key === 'relations' || key === 'style') ? ' persona-wide' : '';
+    const val = escapeHtml(d[key] || '');
+    if (key === 'background' || key === 'relations' || key === 'style') {
+      return `<label class="field${wide}"><span>${label}</span>`
+        + `<textarea data-seat="${seat}" data-field="${key}" rows="${key === 'style' ? 3 : 2}" placeholder="${escapeHtml(ph)}">${val}</textarea></label>`;
+    }
+    return `<label class="field${wide}"><span>${label}</span>`
+      + `<input data-seat="${seat}" data-field="${key}" value="${val}" placeholder="${escapeHtml(ph)}" autocomplete="off"></label>`;
+  }).join('');
+  return `<details class="persona-card" data-seat-card="${seat}">`
+    + `<summary>${seat} 号座位 <span class="persona-total" data-seat-total="${seat}"></span></summary>`
+    + `<div class="persona-fields">${fields}</div></details>`;
+}
+
+function renderPersona() {
+  const box = $('personaSeats');
+  if (!box) return;
+  const p = SETTINGS.persona || { enabled: false, seats: {} };
+  const on = !!p.enabled;
+  const toggle = $('personaOn');
+  if (toggle) toggle.checked = on;
+  const badge = $('personaBadge');
+  if (badge) { badge.textContent = on ? '已开启' : '关闭'; badge.classList.toggle('ok', on); }
+  const n = personaSeatCount();
+  box.innerHTML = Array.from({ length: n }, (_, i) => personaCardHtml(i + 1, p.seats[String(i + 1)] || {})).join('');
+  box.oninput = updatePersonaTotals;
+  updatePersonaTotals();
+}
+
+function updatePersonaTotals() {
+  document.querySelectorAll('[data-seat-card]').forEach(card => {
+    const seat = card.dataset.seatCard;
+    let total = 0;
+    card.querySelectorAll('[data-field]').forEach(el => { total += (el.value || '').length; });
+    const label = card.querySelector('[data-seat-total]');
+    if (label) label.textContent = total ? `· ${total} 字` : '';
+    card.classList.toggle('bad', total > 2200);
+  });
+}
+
+async function savePersona() {
+  const box = $('personaMsg');
+  const enabled = !!($('personaOn') && $('personaOn').checked);
+  const seats = {};
+  document.querySelectorAll('[data-field]').forEach(el => {
+    const seat = el.dataset.seat;
+    const field = el.dataset.field;
+    const val = (el.value || '').trim();
+    if (!val) return;
+    seats[seat] = seats[seat] || {};
+    seats[seat][field] = val;
+  });
+  box.className = 'msg busy'; box.textContent = '保存中…';
+  try {
+    const res = await fetch('/api/settings/local/persona' + tokenQS(), {
+      method: 'POST',
+      headers: apiHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ persona: { enabled, seats }, token: sessionToken() }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.ok) {
+      box.className = 'msg bad';
+      box.textContent = data.error || ('HTTP ' + res.status);
+      (data.details || []).forEach(item => {
+        const card = document.querySelector(`[data-seat-card="${item.seat}"]`);
+        if (card) card.classList.add('bad');
+      });
+      return;
+    }
+    SETTINGS.persona = data.persona || { enabled, seats };
+    renderPersona();
+    box.className = 'msg';
+    box.textContent = enabled ? '已保存：下一局生效（只影响开了人设的对局）。' : '已保存：人设模块关闭，下一局按竞技配置跑。';
   } catch (err) {
     box.className = 'msg bad'; box.textContent = '保存失败：' + ((err && err.message) || err);
   }
@@ -2792,6 +2940,7 @@ $('bulkClear').onclick = () => {
 };
 $('seatSave').onclick = saveSeats;
 $('voiceSave').onclick = saveVoice;
+$('personaSave').onclick = savePersona;
 
 document.addEventListener('keydown', (ev) => {
   if (ev.key !== 'Escape') return;

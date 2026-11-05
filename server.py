@@ -1872,6 +1872,13 @@ class Room:
 
         # 座位人设（表达层）：每局重新加载，改了文件下一局就生效
         personas = persona.load(self.cfg, HERE)
+        # 设置页的「人设模块」（2026-11-05）：开着才覆盖；关着完全不影响竞技配置
+        local_personas, persona_warns = _persona_overrides()
+        for sid, card in local_personas.items():
+            personas.texts[sid] = persona.render(card)
+            personas.personas[sid] = card
+            personas.sources[sid] = "settings.local.json"
+        personas.warnings.extend(persona_warns)
         self.personas = personas
         for seat in game.seats:
             if seat.id in personas:
@@ -3929,6 +3936,7 @@ def _settings_payload(data: dict) -> dict:
         "voice": pub["voice"],
         "director": bool(data.get("director")),
         "butler": pub.get("butler") or {},
+        "persona": pub.get("persona") or {"enabled": False, "seats": {}},
         "token_required": True,
         # ⚠️ 2026-10-31 外部审查 S13：以前这里是**绝对路径**（含中文用户名目录），
         #    任何一次 GET 都能拿到；页面根本不用这个字段。现在只回文件名。
@@ -3986,6 +3994,66 @@ async def api_settings_director(request: Request):
         return JSONResponse({"ok": False, "error": f"存设置失败：{exc}"}, status_code=500)
     if ROOM is not None:
         ROOM.broadcast(ROOM.status())
+    return JSONResponse(_settings_payload(data))
+
+
+def _persona_overrides() -> tuple[dict[int, "persona.Persona"], list[str]]:
+    """读 settings.local.json 的「人设模块」；关着就返回空。
+
+    ⚠️ 人设只进**该座位**的提示包（context.build 读 seat.persona），不是全局。
+    ⚠️ 保存时已经用 render_checked 挡过身份词；这里再挡一次，防止手改 settings.local.json。
+    """
+    block = (_local_settings().get("persona") or {})
+    if not block.get("enabled"):
+        return {}, []
+    out: dict[int, "persona.Persona"] = {}
+    warnings: list[str] = []
+    for key, fields in (block.get("seats") or {}).items():
+        try:
+            sid = int(key)
+        except (TypeError, ValueError):
+            continue
+        if not 1 <= sid <= settings_store.MAX_SEATS:
+            continue
+        p = persona.from_dict(sid, fields)
+        if p.is_empty():
+            continue
+        errors = persona.lint_persona(p)
+        if errors:
+            warnings.append(f"{sid}号人设含身份词，本局跳过：{'；'.join(errors)}")
+            continue
+        out[sid] = p
+    return out, warnings
+
+
+@app.post("/api/settings/local/persona")
+async def api_settings_persona(request: Request):
+    """人设模块开关 + 每座位自定义。默认关；开了之后**下一局**生效，只影响该座位。"""
+    denied = _settings_denied(request)
+    if denied is not None:
+        return denied
+    body = await _read_json_body(request)
+    if body is None:
+        return JSONResponse({"ok": False, "error": "请求格式不对"}, status_code=400)
+    raw = body.get("persona") if isinstance(body.get("persona"), dict) else body
+    block = settings_store.normalize_persona(raw)
+    errors = []
+    for key, fields in block["seats"].items():
+        _text, errs = persona.render_checked(int(key), fields)
+        if errs:
+            errors.append({"seat": int(key), "errors": errs})
+    if errors:
+        return JSONResponse({"ok": False,
+                             "error": "有人设写了身份/角色词（会破坏信息隔离），请改掉再保存",
+                             "details": errors}, status_code=400)
+    data = _local_settings()
+    data["persona"] = block
+    try:
+        settings_store.save(HERE, data)
+    except OSError as exc:
+        return JSONResponse({"ok": False, "error": f"存设置失败：{exc}"}, status_code=500)
+    if ROOM is not None:
+        ROOM.broadcast({"type": "notice", "text": "人设设置已保存，下一局生效"})
     return JSONResponse(_settings_payload(data))
 
 

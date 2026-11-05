@@ -1,4 +1,4 @@
-# coding=utf-8
+﻿# coding=utf-8
 """座位人设（persona）：一张"角色卡"，只影响**怎么说话**，不影响**怎么判断**。
 
 为什么要有姓名/年龄/职业/经历/关系（2026-10-06 扩容，用户要求）：
@@ -170,6 +170,39 @@ def _clean(text: str) -> str:
     while "\n\n\n" in text:
         text = text.replace("\n\n\n", "\n\n")
     return text.strip()
+
+
+#: 页面「人设」模块的字段（顺序即渲染顺序）。关系按换行/分号拆成多条。
+PERSONA_FIELDS = ("name", "age", "job", "traits", "background", "relations", "style")
+
+
+def from_dict(seat: int, data: dict) -> Persona:
+    """把设置页存下来的 dict 还原成 Persona（字段都做过裁剪，见 settings_store）。"""
+    data = data if isinstance(data, dict) else {}
+    rel = str(data.get("relations") or "")
+    relations = [x.strip() for x in re.split(r"[\n;；]", rel) if x.strip()]
+    return Persona(
+        seat=int(seat),
+        name=str(data.get("name") or "").strip(),
+        age=str(data.get("age") or "").strip(),
+        job=str(data.get("job") or "").strip(),
+        traits=str(data.get("traits") or "").strip(),
+        background=str(data.get("background") or "").strip(),
+        relations=relations,
+        style=str(data.get("style") or "").strip(),
+        source="settings.local.json",
+    )
+
+
+def render_checked(seat: int, data: dict) -> tuple[str, list[str]]:
+    """构造 → 越界检查 → 渲染。返回 (文本, 错误列表)；有错时文本为空。"""
+    p = from_dict(seat, data)
+    if p.is_empty():
+        return "", []
+    errors = lint_persona(p)
+    if errors:
+        return "", errors
+    return render(p), []
 
 
 def render(persona: Persona) -> str:

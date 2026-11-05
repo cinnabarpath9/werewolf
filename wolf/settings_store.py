@@ -1,4 +1,4 @@
-# coding=utf-8
+﻿# coding=utf-8
 """本地设置存储：API 平台、座位分配、语音服务。
 
 为什么要有这一层
@@ -71,10 +71,17 @@ _LOCK = threading.Lock()
 
 MAX_SEATS = 18              # 与 config.yaml 的 5~18 人自定义板对齐
 
+#: 人设模块（2026-11-05）：默认关；开启后每个座位可自定义身份/性格/经历/说话风格。
+#: 只进该座位的提示包，不改变规则；文字越多，token 越多（页面已提示）。
+PERSONA_FIELDS = {"name": 40, "age": 20, "job": 60, "traits": 300,
+                  "background": 600, "relations": 400, "style": 800}
+MAX_PERSONA_TOTAL = 2200     # 单座位所有字段合计上限（约 800~1200 token）
+
 def empty() -> dict:
     #: `butler` = 托管模型（2026-11-02）：玩家不想自己决策时，调它替玩家出一手。
     #: `director` = 导演模式（作弊开关）：默认关；开了之后在**对局中**点座位才能看身份。
-    return {"version": 1, "apis": [], "seats": {}, "voice": {}, "butler": {}, "director": False}
+    return {"version": 1, "apis": [], "seats": {}, "voice": {}, "butler": {},
+            "director": False, "persona": {"enabled": False, "seats": {}}}
 
 
 def _text(value, limit: int) -> str:
@@ -137,6 +144,47 @@ def normalize_api(item) -> dict:
     }
 
 
+def normalize_persona(raw) -> dict:
+    """人设模块：`{enabled, seats: {座位: {name, age, job, traits, background, relations, style}}}`。
+
+    · 座位号 1~MAX_SEATS，非法/超范围丢掉；
+    · 每个字段按上限裁剪；单座位合计超 MAX_PERSONA_TOTAL 时**截断最后的字段**，不整条丢；
+    · 不在这里做"角色词越界"检查（那在 persona.render_checked，保存接口会挡住并报错）。
+    """
+    out = {"enabled": False, "seats": {}}
+    if not isinstance(raw, dict):
+        return out
+    flag = raw.get("enabled")
+    if isinstance(flag, str):
+        out["enabled"] = flag.strip().lower() in ("1", "true", "yes", "on")
+    else:
+        out["enabled"] = bool(flag)
+    seats = raw.get("seats")
+    if not isinstance(seats, dict):
+        return out
+    for key, value in seats.items():
+        try:
+            sid = int(str(key).strip())
+        except (TypeError, ValueError):
+            continue
+        if not 1 <= sid <= MAX_SEATS or not isinstance(value, dict):
+            continue
+        row = {}
+        total = 0
+        for field, limit in PERSONA_FIELDS.items():
+            text = _text(value.get(field), limit)
+            if not text:
+                continue
+            if total + len(text) > MAX_PERSONA_TOTAL:
+                text = text[: max(0, MAX_PERSONA_TOTAL - total)]
+            if text:
+                row[field] = text
+                total += len(text)
+        if row:
+            out["seats"][str(sid)] = row
+    return out
+
+
 def normalize_voice(raw) -> dict:
     if not isinstance(raw, dict):
         return {}
@@ -180,6 +228,7 @@ def normalize(raw) -> dict:
                 continue
             data["seats"][str(seat)] = pid
     data["voice"] = normalize_voice(raw.get("voice"))
+    data["persona"] = normalize_persona(raw.get("persona"))
     data["director"] = bool(raw.get("director"))
     data["butler"] = normalize_butler(raw.get("butler"))
     # 注：这里**不校验 api 是否还在 apis 列表里**（2026-11-03 审查曾建议校验，但撤回）：
@@ -405,6 +454,7 @@ def public(data: dict) -> dict:
         "apis": apis,
         "seats": dict(data["seats"]),
         "butler": dict(data.get("butler") or {}),      # 2026-11-03 审查 P1-1：以前漏了这个键
+        "persona": dict(data.get("persona") or {"enabled": False, "seats": {}}),
         "voice": {
             "base_url": voice.get("base_url") or os.environ.get("VOICE_BASE_URL", ""),
             "tts_model": voice.get("tts_model") or os.environ.get("TTS_MODEL", ""),
