@@ -182,8 +182,8 @@ llm:
     #      max_tokens 16000 时大包会**交白卷**（思考吃满、正文空白）；抬到 32000 能答，但偶尔要 500 秒+。
     #      要更快就在这两行把 low 换成 `thinking: "off"`（小米只有开/关，没有预算旋钮；掉约 12 分）。
     #      它思考时**一直吐字节**，所以 idle 看门狗抓不到它的长尾（实测最长空档只有 3.2 秒）。
-    5:  { profile: GEMINI38, temperature: 1.0, max_tokens: 20000, timeout: 450, thinking: low }
-    11: { profile: GEMINI38, temperature: 1.0, max_tokens: 20000, timeout: 450, thinking: low }
+    5:  { profile: GEMINI38, temperature: 1.0, max_tokens: 20000, timeout: 450, thinking: {speech: high, decision: high, aux: low} }
+    11: { profile: GEMINI38, temperature: 1.0, max_tokens: 20000, timeout: 450, thinking: {speech: high, decision: high, aux: low} }
     # 6 号是真人玩家（不配模型）
     #
     # 如果 1.3 以上那几档开始"说胡话 / 格式出错"，把最高那两档降到 1.15 就行。

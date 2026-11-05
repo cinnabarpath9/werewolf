@@ -1,4 +1,4 @@
-# coding=utf-8
+﻿# coding=utf-8
 """思考强度 A/B：用**我们自己的真实 packet** 重放，不靠通用笔试。
 
 为什么不用现成题库：`34 题终版卷` 与 `v2 9 题` 对 DS 的结论相反（low 76% vs high 74% / high 75% vs low 62%）。
@@ -56,7 +56,7 @@ def profile_env(profile: str) -> dict:
 
 
 def saves() -> list[str]:
-    return sorted(glob.glob(os.path.join(ROOT, "games", "game-*.json")), key=os.path.getmtime)
+    return sorted(glob.glob(os.path.join(ROOT, "games", "game-*.json")), key=os.path.getmtime, reverse=True)
 
 
 def candidates() -> list[dict]:
@@ -136,14 +136,14 @@ def cmd_plan(profiles: list[str], levels: list[str], repeats: int) -> int:
     return 0
 
 
-async def cmd_run(profiles: list[str], levels: list[str], repeats: int) -> int:
+async def cmd_run(profiles: list[str], levels: list[str], repeats: int, tag: str = "") -> int:
     from wolf import butler
     from wolf.llm import LLMClient, LLMError, extract_json
 
     picked = json.load(io.open(SCEN, encoding="utf-8"))
     os.makedirs(OUT, exist_ok=True)
     stamp = time.strftime("%Y%m%d-%H%M%S")
-    out = os.path.join(OUT, f"results-{stamp}.json")
+    out = os.path.join(OUT, f"results-{stamp}{('-' + tag) if tag else ''}.json")
     results = []
     total = len(picked) * len(levels) * len(profiles) * repeats
     done = 0
@@ -175,9 +175,10 @@ async def cmd_run(profiles: list[str], levels: list[str], repeats: int) -> int:
                         "save": scen["save"], "day": scen["day"], "seat": scen["seat"],
                         "valid": ok, "error": err, "elapsed": elapsed,
                         "speech_len": len(speech), "keys": sorted((reply or {}).keys()),
+                        "reply": reply, "packet_len": len(scen["packet"]),
                         "completion_tokens": int((client.last_call or {}).get("completion_tokens") or 0),
                         "prompt_tokens": int((client.last_call or {}).get("prompt_tokens") or 0),
-                        "speech": speech[:200],
+                        "speech": speech[:4000],   # 盲评要看完整发言；封顶 4000 字
                     })
                     print(f" {'✅' if ok else '❌'} {elapsed}s  {len(speech)}字")
             await client.aclose()
@@ -219,6 +220,7 @@ def main() -> int:
     ap.add_argument("--profiles", default="QIANFAN_DS,QIANFAN_GLM,MINIMAX,HAIKU,GEMINI38")
     ap.add_argument("--levels", default="off,low,high")
     ap.add_argument("--repeats", type=int, default=1)
+    ap.add_argument("--tag", default="")
     args = ap.parse_args()
 
     load_env()
@@ -236,7 +238,7 @@ def main() -> int:
             print("这会真花钱。确认后加 --yes。先用 --plan 看调用数与粗估成本。")
             return 2
         import asyncio
-        return asyncio.run(cmd_run(profiles, levels, args.repeats))
+        return asyncio.run(cmd_run(profiles, levels, args.repeats, args.tag))
     if args.report is not None:
         return cmd_report(args.report)
     ap.print_help()
