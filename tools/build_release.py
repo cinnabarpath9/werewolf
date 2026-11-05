@@ -74,6 +74,8 @@ TOOLS_KEEP = (
     "voice_check.py",     # 语音连通性自检
     "build_release.py",   # 想自己再打包的人用得上
     "check_release.py",   # 打包后的复检
+    "exam_paper.py",      # 模型考试脚本（三套卷）
+    "exam_papers.json",   # 考试题库（60 题）
 )
 
 #: 打包时要**就地清洗**的其它文本文件：(相对路径, [(正则, 替换), ...])
