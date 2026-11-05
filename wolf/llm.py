@@ -78,7 +78,7 @@ THINKING_LEVELS_BY_STYLE: dict[str, dict[str, dict]] = {
         #:    那道题的思考很容易超过 4096（小题量不出来，所以别看小题的实测）。
         #:    不传预算 = 交给平台默认；外层还有座位的 max_tokens 兜底。
         "low": {"enable_thinking": True, "thinking_budget": 512},
-        #: ⚠️ 2026-10-10 晚回补上限：**完全不给上限**实测会让快米兔千问顶穿 300 秒
+        #: ⚠️ 2026-10-10 晚回补上限：**完全不给上限**实测会让某些中转的千问顶穿 300 秒
         #:    （第一次调用直接 300.0s 失败 → 换家 DeepSeek）。
         #:    带 4096 上限时的历史实测是 avg 92s / max 256s —— 说明那个上限一直在保命。
         #:    现在给 **16384**（原来的 4 倍）：既比"无限想"有边界，又远高于旧值。
@@ -722,7 +722,7 @@ class LLMClient:
                  thinking_style: str = "openai",
                  #: 用**流式**请求（2026-10-10 晚加）：为了"上游卡住"能早点发现。
                  #: 非流式下，上游接了请求却不吐字节时只能干等到总超时（实测 300 秒），
-                 #: 那时整手预算已经烧光、没机会重试（快米兔客服口径：抖动时第二次就通）。
+                 #: 那时整手预算已经烧光、没机会重试（上游反馈：抖动时第二次通常能通）。
                  #: 流式下思考链是连续吐的，所以"静默 N 秒"＝真卡住。
                  stream: bool = True,
                  #: 流式下"连续多少秒没有字节"就判定卡住（默认 **50 秒** —— 作者 2026-10-10 定：
@@ -836,7 +836,7 @@ class LLMClient:
         """
         body = dict(payload)
         body["stream"] = True
-        # 让最后一帧带 usage（快米兔文档里写明了支持；不支持的话拿不到 token 数，不影响正文）
+        # 让最后一帧带 usage（上游文档写明了支持；不支持的话拿不到 token 数，不影响正文）
         body["stream_options"] = {"include_usage": True}
         text_parts: list[str] = []
         think_parts: list[str] = []
@@ -938,7 +938,7 @@ class LLMClient:
             ],
             "max_tokens": self.max_tokens,
         }
-        # ⚠️ 有的通道（52pay 的 claude-haiku-5-5 实测）**不接受自定义 temperature**：
+        # ⚠️ 有的通道（某些中转的 claude-haiku 实测）**不接受自定义 temperature**：
         # 配置里把温度写成 `temperature: null` 就整个字段不发。
         if self.temperature is not None:
             payload["temperature"] = self.temperature
@@ -952,7 +952,7 @@ class LLMClient:
                 started = asyncio.get_running_loop().time()
                 # ⚠️ 2026-10-10 晚：默认走**流式**（理由见 `_post_stream` 的注释）——
                 #    非流式下"上游憋住不回"只能干等到总超时（实测 300 秒），
-                #    那时整手预算已经烧光、没机会重试（快米兔客服：抖动时第二次就通）。
+                #    那时整手预算已经烧光、没机会重试（上游反馈：抖动时第二次通常能通）。
                 if self.stream:
                     text, _reason, used = await self._post_stream(payload)
                     elapsed = asyncio.get_running_loop().time() - started

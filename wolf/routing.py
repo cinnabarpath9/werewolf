@@ -266,7 +266,7 @@ def resolve(cfg: dict, seat) -> SeatLLM:
     seat_block = _lookup(llm.get("seats"), seat.id)
     block = _merge(_expand(llm.get("default")), _expand(role_block))
     # ⚠️ `_merge` 会跳过 None（防"空值覆盖默认"），但 `temperature: null` 是**有意**的：
-    # 表示"这个通道不接受温度，别发这个字段"（52pay 的 claude-haiku-5-5 实测 400）。
+    # 表示"这个通道不接受温度，别发这个字段"（某些中转的 claude-haiku 实测 400）。
     # 所以座位层显式写 null 时记一个标记，合并后按 None 处理。
     null_temperature = isinstance(seat_block, dict) and "temperature" in seat_block         and seat_block.get("temperature") is None
     block = _merge(block, _expand(seat_block))

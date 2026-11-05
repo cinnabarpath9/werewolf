@@ -17,7 +17,7 @@
 
 运行包里**会有**：server.py / run_game.py / config.yaml / wolf/ / content/ / web/ /
 tools/（**只有白名单里的几个**，见 TOOLS_KEEP）/ start.bat / start.sh / README.md /
-部署说明.md / LICENSE / .env.example / assets/。
+部署说明.md / 模型测试分数.md / LICENSE / .env.example / assets/。
 **不会有**：.env / settings.local.json / 配对码.txt / 联机码.txt / games/ / var/ / docs/ / tests/ /
 reports/ / .git / __pycache__ / 外部审查报告。
 """
@@ -52,6 +52,7 @@ FILES = (
     "requirements.txt",
     "README.md",
     "部署说明.md",
+    "模型测试分数.md",
     "LICENSE",
     ".env.example",
     "start.bat",
