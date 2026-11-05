@@ -626,6 +626,10 @@ class Room:
         #: 座位 → 当前那条 ask（重连时只补发给这个座位的人）。
         self.pending_asks: dict[int, dict] = {}
         self.pending_ask: dict | None = None               # 最近一条，兼容旧代码/测试
+        #: 2026-11-06「全程自动托管」：这些座位轮到时自动调托管模型，不再等玩家点。
+        #: 每局重置；可在游戏页随时开/关（关闭会取消正在跑的那一手）。
+        self.auto_butler_seats: set[int] = set()
+        self.auto_butler_tasks: dict[int, asyncio.Task] = {}
         #: 「轮到你」的报文序号（单调递增，新局重置）。客户端把它原样回传，
         #: 服务端在 `ask_done` 里带回同一个 id —— 客户端据此只清自己那一条面板
         #: （详见 broadcast 里的注释：补发的旧 ask 不许清掉玩家正在操作的新面板）。
@@ -643,7 +647,7 @@ class Room:
         #: 以前硬编码 1，结果是"配置里写了 6 号，手机上不选座位就坐到 1 号去了"
         #: （1 号有人设有模型，等于把 AI 挤掉一个、自己坐错位置）。
         self.human_seat = max(1, int(self.game_cfg.get("human_seat") or 1))
-        self.human_timeout = float(self.game_cfg.get("human_timeout", 900))
+        self.human_timeout = float(self.game_cfg.get("human_timeout", 300))
         #: 上游挂住时的两层保险（秒）：单次硬上限 / 整手预算。
         #: ⚠️ **建局与 status 必须用同一对数**（2026-10-08 收敛）：以前这里是 150、
         #:    status 那边是 300 —— 配置里漏写键名时，手机会显示一个引擎根本不会遵守的秒数
@@ -692,8 +696,8 @@ class Room:
         self.join_code = self._load_or_make_join_code()
         #: 这一局是不是联机局（有人在房间里 → True）。单人局保持 False，旧行为不变。
         self.multiplayer = False
-        #: 联机局等真人的上限：单人 900 秒无所谓，联机时一个人去倒水就会晾住全场。
-        self.human_timeout_solo = int(self.game_cfg.get("human_timeout", 900))
+        #: 联机局等真人的上限：单人 300 秒（默认），联机时一个人去倒水就会晾住全场。
+        self.human_timeout_solo = int(self.game_cfg.get("human_timeout", 300))
         self.multiplayer_timeout = int(self.game_cfg.get("multiplayer_human_timeout", 180))
         self.human_timeout = self.human_timeout_solo
         #: 房间大厅里主机正在挑的板子（还没开局时给访客看座位数用）。
@@ -1075,6 +1079,9 @@ class Room:
         for ws in list(self.clients.keys()):
             if self.viewer_seat(ws) == int(seat_id):
                 self.send_to(ws, payload)
+        # 全程自动托管：面板照发（玩家看得到发生了什么），后台同时替这一手决策。
+        if int(seat_id) in self.auto_butler_seats:
+            self.kick_auto_butler(int(seat_id))
         return future
 
     def close_ask(self, seat_id: int, ask_id=None) -> None:
@@ -1149,7 +1156,62 @@ class Room:
             return None, f"托管模型「{name}」建客户端失败：{type(exc).__name__}: {exc}"
         return client, ""
 
-    async def autopilot(self, ws, seat: int) -> None:
+    def _auto_task_done(self, seat: int, task: asyncio.Task) -> None:
+        if self.auto_butler_tasks.get(seat) is task:
+            self.auto_butler_tasks.pop(seat, None)
+        if task.cancelled():
+            return
+        try:
+            task.exception()          # 取走异常，别让 asyncio 打 "never retrieved" 日志
+        except Exception:             # noqa: BLE001
+            pass
+
+    def kick_auto_butler(self, seat: int) -> None:
+        """全程托管：这个座位现在有 ask 就起一个后台任务。
+
+        由 `ask()` 在把面板发给玩家之后调用；也可以由开关打开时补一刀。
+        同一座位同一时间只跑一个自动托管任务，避免手动/自动重复花钱。
+        """
+        seat = int(seat or 0)
+        if not seat or seat not in self.auto_butler_seats:
+            return
+        if seat not in self.pending_asks:
+            return
+        old = self.auto_butler_tasks.get(seat)
+        if old is not None and not old.done():
+            return
+        ws = next((w for w in list(self.clients.keys())
+                   if self.viewer_seat(w) == seat), None)
+        try:
+            task = asyncio.create_task(self.autopilot(ws, seat, auto=True))
+        except RuntimeError:              # 没有运行中的事件循环（测试/退出）；不自动
+            return
+        self.auto_butler_tasks[seat] = task
+        task.add_done_callback(lambda t, s=seat: self._auto_task_done(s, t))
+
+    def set_auto_butler(self, seat: int, on: bool) -> None:
+        """开/关这个座位的全程托管；关闭时取消正在跑的那一手。"""
+        seat = int(seat or 0)
+        if not seat:
+            return
+        if on:
+            self.auto_butler_seats.add(seat)
+            self.kick_auto_butler(seat)
+        else:
+            self.auto_butler_seats.discard(seat)
+            task = self.auto_butler_tasks.get(seat)
+            if task is not None and not task.done():
+                task.cancel()
+
+    def clear_auto_butler(self) -> None:
+        """新局/收尾：清掉自动托管开关和后台任务，别让下一局意外替你打。"""
+        for task in list(self.auto_butler_tasks.values()):
+            if not task.done():
+                task.cancel()
+        self.auto_butler_tasks.clear()
+        self.auto_butler_seats.clear()
+
+    async def autopilot(self, ws, seat: int, auto: bool = False) -> None:
         """调一次托管模型，替玩家出这一手。
 
         2026-11-03 审查修复：
@@ -1158,12 +1220,18 @@ class Room:
           · P1-6：本函数由 WS 处理器用 `create_task` 起后台任务，**不再阻塞该连接的读循环**
             （以前托管 180 秒内玩家手答/ping 全部堆着）；
           · P2：client 用完即关（以前没进 clients_llm，永远不释放）。
+
+        2026-11-06：`auto=True` 是「全程自动托管」触发的。每个 await 回来都要再看一眼
+        开关还在不在——玩家随时可以关掉，不能因为模型已经跑了 50 秒就硬塞答案。
         """
         from wolf.context import Task                       # noqa: PLC0415
         seat = int(seat)
         pending = self.pending_asks.get(seat)
         if not pending:
             self.send_to(ws, {"type": "notice", "text": "现在没有等你的行动，托管用不上。"})
+            return
+        if auto and seat not in self.auto_butler_seats:
+            self.send_to(ws, {"type": "notice", "text": "🤖 全程托管已经关了，这一手交回给你。"})
             return
         ask_id = pending.get("ask_id")
         self.send_to(ws, {"type": "notice", "text": "🤖 托管模型正在替你想这一手…"})
@@ -1251,6 +1319,10 @@ class Room:
         if used_name != primary:
             self.send_to(ws, {"type": "notice",
                               "text": f"🤖 主托管模型没成功，已用替补「{used_name}」答完这一手。"})
+        if auto and seat not in self.auto_butler_seats:
+            self.send_to(ws, {"type": "notice",
+                              "text": "🤖 全程托管已经关了，这一手不提交；你可以自己答。"})
+            return
         current = self.pending_asks.get(seat)
         if not current or current.get("ask_id") != ask_id:
             self.send_to(ws, {"type": "notice",
@@ -1387,6 +1459,8 @@ class Room:
             "multiplayer": self.multiplayer,
             "players": self.room_players_public(),
             "human_timeout": self.human_timeout,
+            #: 这个连接坐的座位是否开了「全程自动托管」；换页/重连后按钮状态靠它。
+            "auto_butler": seat in self.auto_butler_seats,
             # 手机上"X号 正在思考…"的提示要用到：让它知道最多还会等多久（见 web/index.html）
             # ⚠️ 这两个数与真正建局时传给 `Game(...)` 的是**同一对**（Room.__init__ 里算好，
             #    见 wolf/engine.py::timeouts_from_cfg）—— 别再在这里各写一份兜底默认值。
@@ -1754,6 +1828,8 @@ class Room:
                     multiplayer: bool = False) -> dict:
         if self.running:
             return {"ok": False, "error": "已经有一局在跑了"}
+        # 新局不继承上一局的自动托管：避免开新局后没注意、AI 又替你打了一整局。
+        self.clear_auto_butler()
 
         board_name = str(board or self.game_cfg.get("board") or "eleven_wolfking")
         try:
@@ -1827,6 +1903,7 @@ class Room:
                 _f.cancel()
         self.asks.clear()
         self.pending_asks.clear()
+        self.clear_auto_butler()
         self.awaiting = None
         # ⚠️ 2026-10-31 外部审查 X3：这里以前把 `ask_seq` 归零（"新局从 1 重数"）。
         #    但客户端那边可能还压着上一局没送出去的 action（断线时点的确认），
@@ -2145,6 +2222,7 @@ class Room:
         """
         if self.game is game:
             self.cleaning = True
+            self.clear_auto_butler()
             self.broadcast_status()    # running=False + cleaning=True → 前端显示"正在收尾"
 
         path = None
@@ -2226,6 +2304,7 @@ class Room:
                 _f.cancel()                 # 把所有"等你输入"的那几手立刻放掉
         self.asks.clear()
         self.pending_asks.clear()
+        self.clear_auto_butler()
         self.awaiting = None
         if self.stall_decision is not None and not self.stall_decision.done():
             # 正卡在"上游失败"的弹窗上：直接放掉，别让它把引擎吊在那儿
@@ -2587,13 +2666,40 @@ class Room:
                 self.stall_decision.set_result(action)
             else:
                 self.broadcast({"type": "notice", "text": "现在没有卡住的对局。"})
+        elif kind == "auto_butler":
+            seat = self.viewer_seat(ws)
+            if not seat:
+                self.send_to(ws, {"type": "notice", "text": "只有坐座位的玩家才能开全程托管。"})
+                return
+            if not self.running or self.game is None:
+                self.send_to(ws, {"type": "notice", "text": "开局后才有你的行动，开全程托管用不上。"})
+                return
+            try:
+                is_human = self.game.seat_by_id(seat).is_human
+            except Exception:                          # noqa: BLE001
+                is_human = False
+            if not is_human:
+                self.send_to(ws, {"type": "notice", "text": "这个座位不是真人座位，开不了全程托管。"})
+                return
+            on = bool(message.get("on"))
+            self.set_auto_butler(seat, on)
+            self.send_to(ws, {"type": "notice",
+                              "text": ("🤖 全程托管已开启：接下来轮到你时自动让托管模型决策；"
+                                       "再点一次可关闭。") if on else
+                                      "🤖 全程托管已关闭：接下来轮到你时会等你亲自操作。"})
+            self.broadcast_status()
         elif kind == "autopilot":
             seat = self.viewer_seat(ws)
             if not seat:
                 self.send_to(ws, {"type": "notice", "text": "只有坐座位的玩家才能托管。"})
             else:
-                # P1-6：后台跑，别把这条连接的读循环堵住
-                asyncio.create_task(self.autopilot(ws, seat))
+                task = self.auto_butler_tasks.get(seat)
+                if task is not None and not task.done():
+                    self.send_to(ws, {"type": "notice",
+                                      "text": "🤖 全程托管正在处理这一手，不用重复点。"})
+                else:
+                    # P1-6：后台跑，别把这条连接的读循环堵住
+                    asyncio.create_task(self.autopilot(ws, seat))
         elif kind == "action":
             # ⚠️ 2026-10-08 修（自查发现的 P2-1，真协议缺陷）：
             #    客户端回传的 `ask_id` 以前**只被回显、从不校验**。断线时玩家在旧面板上
@@ -2623,6 +2729,10 @@ class Room:
                 self.pending_asks.pop(seat, None)
                 if self.pending_ask is pending:
                     self.pending_ask = next(iter(self.pending_asks.values()), None)
+                # 玩家自己答了：把还挂着的全程托管任务收掉，别再多花一次模型钱。
+                auto_task = self.auto_butler_tasks.pop(seat, None)
+                if auto_task is not None and not auto_task.done():
+                    auto_task.cancel()
                 future.set_result(message.get("payload") or {})
                 # ⚠️ 发"这一手已经收到"：手机切出去又切回来时，服务端会在 sync 里补发
                 #    pending_ask，而用户离线期间点的那一手在 OUTBOX 里排队 —— 两者撞上就会出现

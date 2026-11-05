@@ -46,7 +46,7 @@ game:
   auto_retries: 2           # 首次失败后再自动试 2 次（合计 3 次）
   retry_backoff: [3, 8]
   retry_jitter: 0.3
-  fallback: [DEEPSEEK, MIMO, GLM, QWEN, ARK]   # 换家顶上的顺序
+  fallback: [DEEPSEEK, MIMO, GLM, QWEN, ARK]   # 换家顺序；缺 key 的档案会自动跳过
   carry_reasoning: true
   carry_reasoning_chars: 300
 
@@ -68,7 +68,7 @@ game:
   save_dir: games
 
   public_https_base: ""     # 留空即可；要提示条就写 .env 的 WOLF_PUBLIC_HTTPS_BASE
-  human_timeout: 900
+  human_timeout: 300
   multiplayer_human_timeout: 180
   stall_timeout: 1800
 

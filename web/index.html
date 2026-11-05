@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
@@ -1327,6 +1327,7 @@
     <div class="top-actions">
       <span class="chip model-chip" id="modelBadge" hidden></span>
       <button class="ghost" id="btnAbandon" type="button" style="display:none">放弃本局</button>
+      <button class="ghost" id="btnAutoButler" type="button" title="开启后，轮到你时自动让托管模型决策；再点一次关闭" style="display:none">🤖 全程托管：关</button>
       <button class="ghost" id="btnTable" type="button">🪑 牌桌</button>
       <button class="ghost" id="btnRules" type="button">规则</button>
       <button class="ghost" id="btnPersona" type="button">人设</button>
@@ -3354,6 +3355,14 @@ function renderHeader() {
   // 访客不能放弃/复盘（那两件事要主机权限）；规则、人设、自检、语音仍然可用。
   const canAdmin = !MP.guest;
   $('btnAbandon').style.display = (st.running && canAdmin) ? '' : 'none';
+  // 2026-11-06：全程自动托管。观众（seat=0）没有行动面板，不显示。
+  const autoBtn = $('btnAutoButler');
+  if (autoBtn) {
+    autoBtn.style.display = (st.running && Number(st.human_seat || 0) > 0) ? '' : 'none';
+    autoBtn.textContent = (st.auto_butler ? '🤖 全程托管：开' : '🤖 全程托管：关');
+    autoBtn.style.color = st.auto_butler ? 'var(--accent)' : '';
+    autoBtn.style.borderColor = st.auto_butler ? 'rgba(228,192,124,.65)' : '';
+  }
   $('btnReview').style.display = canAdmin ? '' : 'none';
   if (!st.running) resetAbandonButton();
 
@@ -4352,6 +4361,13 @@ $('btnAbandon').onclick = () => {
   send({ type: 'abandon' });
 };
 
+// 全程自动托管：按钮只负责发开关；服务端把状态放进 status.auto_butler，
+// 换页/重连后 renderHeader 会按真实状态恢复，不靠本地猜测。
+$('btnAutoButler').onclick = () => {
+  const on = !(S.status && S.status.auto_butler);
+  send({ type: 'auto_butler', on: on });
+};
+
 // 语音开关：第一次点必须由用户触发（浏览器规定），所以这里既解锁也开始播
 $('vToggle').onclick = () => (S.voice.on ? VOICE.off() : VOICE.unlock());
 $('vReplay').onclick = () => { const e = VOICE.last; if (e) VOICE.say(e); };
@@ -4786,7 +4802,7 @@ function renderAsk(f, ask) {
   f.appendChild(foldBtn);
 
   //: ⚠️ 2026-10-08 加（自查 P2-2）：**这一手还剩多久**必须写在面板上。
-  //  服务端 `human_timeout` 到点就按「弃权」处理（默认 900 秒），而以前界面上**全程没有**
+  //  服务端 `human_timeout` 到点就按「弃权」处理（默认 300 秒），而以前界面上**全程没有**
   //  任何提示 —— 玩家离开一会儿回来，只看到一条事后的 notice，那一票已经白丢了。
   //  数据不用改协议：`human_timeout` 早就在 status 里（`server.py` 的 `Room.status()`）。
   //  ⚠️ 计时器要跟着面板走：面板被收掉/重画时必须清掉（清理由 `askTimerStop` 统一做，
@@ -4984,7 +5000,7 @@ function renderAsk(f, ask) {
   }
 
   // 狼队讨论（夜里的顺序发言）：必须单独有界面，否则人类狼发不出话、
-  // 整个夜晚阶段会卡到 human_timeout（15 分钟）—— 这是实测踩到的坑。
+  // 整个夜晚阶段会卡到 human_timeout（默认 5 分钟）—— 这是实测踩到的坑。
   if (ask.kind === 'wolf_talk') {
     const ta = document.createElement('textarea');
     ta.placeholder = '说给队友听：你今晚想杀谁、为什么（例：我想刀 4 号，他昨天带票最凶）';
@@ -5216,7 +5232,7 @@ function renderAsk(f, ask) {
     b.style.flex = '0 0 96px';
     row.appendChild(b);
   } else {
-    // 非投票的选号面板也允许"这一手放弃"：否则手机端只能干等 900 秒超时
+    // 非投票的选号面板也允许"这一手放弃"：否则手机端只能干等 human_timeout 超时
     // （引擎和桌面端本来就支持 abstain，只有手机端没入口）
     // 空过在这个板子上是**正经的一手**（摄梦人可以今晚不摄、养鸦人可以今晚不咒人、
     // 狼王可以不带人），所以按钮文案直接写清楚，别让人猜"放弃"是什么意思。
