@@ -1193,7 +1193,7 @@
           <b>⚠️ 开之前先读：人设会影响模型的判断倾向，可能降低竞技强度。</b>
           <p>人设只改变“怎么说话、怎么待人”，不改变规则，也不给任何额外身份信息；
              但性格/关系/打法写得越具体，模型越可能按人设做选择，而不是按最优胜率。</p>
-          <p><b>成本：</b>人设文字会进该座位每次调用的提示包——写得越多，token 越多、越贵。
+          <p><b>成本：</b>人设文字会进该座位<b>每次调用</b>的提示包——<b>不增加调用次数</b>，只增加每次的输入 token；写得越多，token 越多、越贵。
              11 人局一个座位一局大约 20~40 次调用，每个座位每多 100 字，全局大约多几千 token。
              竞技请保持关闭；只想看沉浸感再开。</p>
         </div>
@@ -1386,6 +1386,8 @@ const S = { status: {}, you: null, ask: null, entries: [], lastDay: null,
   knownRoles: {},      // 导演模式点开过的身份（seat → 角色名）
   tags: {},            // 本机座位标签（seat → 狼/好/待定）；只给自己看
   tagMode: false,      // 「🏷 标签」模式：点座位号轮换标签
+  lastSave: null,      // 最近一次收尾存档（含 mock），底部「看上一局」用
+  lastSaveMock: false,
   table: { hidden: lsGet('wolf.table') === '0', settle: null },
             pick: { mock: null, board: null, seat: null },
             voice: { on: false },
@@ -3166,6 +3168,10 @@ function handle(m) {
   switch (m.type) {
     case 'status':
       S.status = m;
+      if (m.last_save) {
+        S.lastSave = m.last_save;
+        S.lastSaveMock = !!m.last_save_mock;
+      }
       // ⚠️ P3 的关键一小步：**这一条来自服务端**，从现在起"在跑 / 没在跑"以它为准。
       //    以前没有这个标记，页面在第一条 status 到达之前就按"没在跑"画了开局面板。
       S.statusKnown = true;
@@ -4725,7 +4731,9 @@ function renderFooter() {
   }, 'primary');
   wrap.appendChild(start);
 
-  const rv = mkBtn('看上一局的复盘留痕', () => openReview(), 'ghost');
+  const rv = mkBtn('看上一局的复盘留痕',
+    () => openReview(S.lastSave || undefined,
+                     S.lastSave ? {mock: S.lastSaveMock} : undefined), 'ghost');
   rv.style.marginTop = '8px'; rv.style.width = '100%';
   wrap.appendChild(rv);
   f.appendChild(wrap);
@@ -5467,7 +5475,8 @@ async function openReviewList() {
   document.body.appendChild(box);
 }
 
-async function openReview(want) {
+async function openReview(want, opts) {
+  const mock = !!(opts && opts.mock);
   // ⚠️ 这里以前没有 try/catch，也没看 HTTP 状态：网络断了会抛未捕获的错（按钮像死了），
   // 401/403（缺配对码 / 码不对）会被说成"还没有存档，先打一局" —— 用户以为是自己没打过局。
   let list = null;
@@ -5486,16 +5495,19 @@ async function openReview(want) {
     return;
   }
   if (!list) { toast('存档列表读不出来（服务端返回的不是 JSON）', true); return; }
-  if (!list.games || !list.games.length) { toast('还没有存档，先打一局'); return; }
-  if (want && !list.games.includes(want)) {
+  if ((!list.games || !list.games.length) && !(want && mock)) {
+    toast('还没有存档，先打一局'); return;
+  }
+  if (want && !list.games.includes(want) && !mock) {
     // 2026-11-03 审查 P1：以前这里静默回退到最新一局 —— 用户点 A，看到的是 B。
     toast('这一局已经不在存档里了（只保留最近若干局），换一条看吧', true);
     return;
   }
   const name = want || list.games.filter(n => /^game-\d{8}-\d{6}\.json$/.test(n)).pop();
   // ① 首屏走轻量口径：`?lite=1`。老服务端会忽略这个参数、照旧回全文（行为不变）。
+  //   mock=1 是显式读 `_mock/`，普通列表不列 mock，只有底部“看上一局”会带这个标记。
   const wantQS = tokenQS();
-  const liteQS = '?lite=1' + (wantQS ? '&' + wantQS.slice(1) : '');
+  const liteQS = '?lite=1' + (wantQS ? '&' + wantQS.slice(1) : '') + (mock ? '&mock=1' : '');
   let game = null;
   try {
     const res = await fetch('/api/game/' + encodeURIComponent(name) + liteQS, { headers: apiHeaders() });
@@ -5732,8 +5744,11 @@ async function openReview(want) {
     holder.hidden = false;
     holder.innerHTML = '<div class="rvload">正在取这一条的完整思维链…</div>';
     try {
+      const callQS = tokenQS()
+        ? tokenQS() + (mock ? '&mock=1' : '')
+        : (mock ? '?mock=1' : '');
       const res = await fetch('/api/game/' + encodeURIComponent(name) + '/call/' + encodeURIComponent(idx)
-        + tokenQS(), { headers: apiHeaders() });
+        + callQS, { headers: apiHeaders() });
       let j = null;
       try { j = await res.json(); } catch (e) { j = null; }
       if (!res.ok) {

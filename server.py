@@ -668,6 +668,7 @@ class Room:
         self.mock = mock_default
         self.rng = random.Random()
         self.last_save: str | None = None
+        self.last_save_mock: bool = False
         #: 本局存档名（自动存盘与终局存盘共用同一个文件）；开新局时在 start() 里清空
         self.save_stem: str | None = None
         self.autosave_count = 0
@@ -1497,6 +1498,10 @@ class Room:
             "boards": self.board_options(),
             # 上游失败导致暂停时：手机刷新页面也能靠它把弹窗补回来
             "stall": self.stall,
+            #: 最近一次收尾存档（含 mock 标记）；底部「看上一局的复盘留痕」用它，
+            #: 否则 mock 局落在 `_mock/`、不在 `/api/games` 列表里，按钮会拿不到名字。
+            "last_save": self.last_save,
+            "last_save_mock": bool(self.last_save_mock),
         }
         if host:
             base["join_code"] = self.join_code
@@ -2178,6 +2183,7 @@ class Room:
 
             path = game.save(save_dir, enrich=_enrich, stem=self.save_stem)
             self.last_save = os.path.basename(path)
+            self.last_save_mock = bool(self.mock)
             if not in_progress:
                 # 留档条数 + 磁盘预算：**先删 mock、再删真局**（各自最旧的先删），见 prune_saves
                 rep = prune_saves(room_cfg)
@@ -3864,14 +3870,22 @@ def _game_name_problem(name: str) -> str | None:
     return None
 
 
-def _game_save_path(name: str) -> str:
-    return os.path.join(resolve_save_dir(), name)
+def _game_save_path(name: str, mock: bool = False) -> str:
+    base = resolve_save_dir()
+    if mock:
+        base = _mock_save_dir(base)
+    return os.path.join(base, name)
 
 
-def _read_save(name: str) -> dict | None:
+def _mock_requested(request: Request) -> bool:
+    """显式读 mock 存档：`?mock=1`。默认 false，普通复盘列表/真局行为不变。"""
+    return str(request.query_params.get("mock") or "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _read_save(name: str, mock: bool = False) -> dict | None:
     """读一份存档（读不到 / 坏了 → None）。调用方自己决定回什么码。"""
     try:
-        with open(_game_save_path(name), encoding="utf-8") as fh:
+        with open(_game_save_path(name, mock), encoding="utf-8") as fh:
             data = json.load(fh)
     except (OSError, ValueError):
         return None
@@ -4009,9 +4023,10 @@ async def api_game_call(name: str, index: str, request: Request):
         idx = int(str(index).strip())
     except (TypeError, ValueError):
         return JSONResponse({"error": f"序号必须是整数（收到 {index}）"}, status_code=400)
-    data = _read_save(name)
+    mock = _mock_requested(request)
+    data = _read_save(name, mock)
     if data is None:
-        if not os.path.exists(_game_save_path(name)):
+        if not os.path.exists(_game_save_path(name, mock)):
             return JSONResponse({"error": "not found"}, status_code=404)
         return JSONResponse({"error": "存档读不出来（文件坏了或不是 JSON）"}, status_code=500)
     rows = data.get("transcript") or []
@@ -4051,11 +4066,12 @@ async def api_game(name: str, request: Request):
     bad = _game_name_problem(name)
     if bad:
         return JSONResponse({"error": bad}, status_code=400)
-    path = _game_save_path(name)
+    mock = _mock_requested(request)
+    path = _game_save_path(name, mock)
     if not os.path.exists(path):
         return JSONResponse({"error": "not found"}, status_code=404)
     if str(request.query_params.get("lite") or "").strip().lower() in ("1", "true", "yes", "on"):
-        data = _read_save(name)
+        data = _read_save(name, mock)
         if data is None:
             return JSONResponse({"error": "存档读不出来（文件坏了或不是 JSON）"}, status_code=500)
         out = _lite_game(data)
@@ -4063,7 +4079,7 @@ async def api_game(name: str, request: Request):
         return JSONResponse(out)
     # ⚠️ 2026-10-25 修：默认分支原来裸 `json.load` —— 一份被写坏的存档（掉电 / 磁盘满）
     #    会直接抛未捕获异常变成 500 + 一整页栈。现在与 `lite` 分支走同一个 `_read_save` 兜底。
-    data = _read_save(name)
+    data = _read_save(name, mock)
     if data is None:
         return JSONResponse({"error": "存档读不出来（文件坏了或不是 JSON）"}, status_code=500)
     return JSONResponse(data)
