@@ -26,6 +26,38 @@ class Entry:
     seat: int | None = None
     data: dict = field(default_factory=dict)
     visible_to: tuple[str, ...] = (PUBLIC,)
+    #: 复盘语义（2026-11-06）：动作级类型 + 一句话摘要。
+    #: `kind` 是粗分类；`action` 让"投票/警长票/出局/夜刀"能直接筛，
+    #: `summary` 让手机/统计不必从 text 里猜。
+    action: str = ""
+    summary: str = ""
+
+    def __post_init__(self) -> None:
+        d = self.data if isinstance(self.data, dict) else {}
+        if not self.action:
+            if self.kind == "vote":
+                self.action = "sheriff_vote" if d.get("sheriff_vote") else "vote"
+            else:
+                self.action = str(self.kind or "")
+        if not self.summary:
+            text = str(self.text or "").strip()
+            if self.kind == "vote":
+                target = d.get("target")
+                who = f"{self.seat}号" if self.seat is not None else "某位"
+                if d.get("invalid") or target is None:
+                    self.summary = f"{who} 弃权/无效票"
+                else:
+                    self.summary = f"{who} → {target}号"
+            elif self.kind == "announce":
+                self.summary = text[:80]
+            elif self.kind == "claim":
+                self.summary = text[:80]
+            elif self.kind == "night":
+                self.summary = f"夜间：{text[:60]}" if text else "夜间行动"
+            elif self.kind == "speech":
+                self.summary = text[:60]
+            else:
+                self.summary = text[:60]
 
     def visible(self, seat_id: int, camp: str) -> bool:
         for who in self.visible_to:

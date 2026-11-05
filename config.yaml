@@ -68,7 +68,7 @@ game:
   save_dir: games
 
   public_https_base: ""     # 留空即可；要提示条就写 .env 的 WOLF_PUBLIC_HTTPS_BASE
-  human_timeout: 300           # 单人等真人行动的上限（秒）；漏点一次最多等 5 分钟
+  human_timeout: 900           # 单人等真人行动的上限（秒）；允许长考/回看，默认 15 分钟
   multiplayer_human_timeout: 180  # 联机局等真人的上限（秒）
   stall_timeout: 1800
 

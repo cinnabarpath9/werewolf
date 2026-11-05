@@ -136,6 +136,7 @@
   transform-style:preserve-3d;cursor:default;z-index:2}
 .ts-seat .ts-no{font-weight:700;font-size:14px;color:#f0e6c8}
 .ts-seat .ts-role{font-size:10px;color:#9aa3b8;margin-top:2px}
+  .ts-seat .ts-tag{display:block;font-size:10px;font-weight:700;margin-top:1px}
 .ts-seat.me{border-color:#c9a45c;box-shadow:0 0 0 1px #c9a45c inset}
 .ts-seat.speaking{border-color:#e3c069;box-shadow:0 0 10px rgba(227,192,105,.55)}
 .ts-seat.dead{opacity:.32;filter:grayscale(1)}
@@ -202,6 +203,22 @@
   .stall-row{display:flex;gap:8px;margin-top:14px;flex-wrap:wrap}
   .stall-row button{flex:1 1 120px}
   #reviewWrap{max-height:60vh;overflow:auto}
+  .rvsec{margin:10px 0 4px}
+  .rvsec>summary{font-weight:600;color:var(--accent);cursor:pointer}
+  .rvmatrix{width:100%;border-collapse:collapse;font-size:11.5px;margin-top:5px}
+  .rvmatrix th,.rvmatrix td{border-bottom:1px solid var(--line-soft);padding:3px 2px;text-align:center;white-space:nowrap}
+  .rvmatrix th{color:var(--dim);font-weight:500}
+  .rvmatrix .rvtag{background:none;border:0;padding:1px 2px;cursor:pointer;color:var(--dim);font-size:11.5px}
+  .rvmatrix .rvtag:hover{color:var(--accent)}
+  .rvmatrix td.hit{color:var(--accent);font-weight:700}
+  .rvmatrix td.inv{color:var(--dim);font-size:10.5px}
+  .rvflow{display:flex;flex-direction:column;gap:4px;margin-top:5px}
+  .rvflow .flowrow{display:flex;gap:5px;align-items:center;flex-wrap:wrap;font-size:11.5px}
+  .rvflow .flowday{color:var(--accent);font-weight:700;min-width:52px}
+  .rvflow .flowphase{color:var(--dim);min-width:24px}
+  .rvflow .flowchip{border:1px solid var(--line-soft);border-radius:6px;padding:0 5px;color:var(--text);opacity:.85}
+  .rvtagrow{display:flex;gap:5px;flex-wrap:wrap;margin-top:5px}
+  .rvtagrow .rvtag{border:1px solid var(--line-soft);border-radius:6px;background:none;color:var(--dim);padding:1px 6px;font-size:11.5px;cursor:pointer}
   .rv{border-bottom:1px solid var(--line-soft);padding:9px 0}
   .rv b{color:var(--accent);font-weight:600}
   .rvcall{cursor:pointer;display:flex;flex-wrap:wrap;gap:4px 8px;align-items:baseline}
@@ -1328,6 +1345,7 @@
       <span class="chip model-chip" id="modelBadge" hidden></span>
       <button class="ghost" id="btnAbandon" type="button" style="display:none">放弃本局</button>
       <button class="ghost" id="btnAutoButler" type="button" title="开启后，轮到你时自动让托管模型决策；再点一次关闭" style="display:none">🤖 全程托管：关</button>
+      <button class="ghost" id="btnTags" type="button" title="打开后点座位号给自己做标记（狼/好/待定），只在本机" style="display:none">🏷 标签：关</button>
       <button class="ghost" id="btnTable" type="button">🪑 牌桌</button>
       <button class="ghost" id="btnRules" type="button">规则</button>
       <button class="ghost" id="btnPersona" type="button">人设</button>
@@ -1366,6 +1384,8 @@ let ws = null, reconnectTimer = null;
 const S = { status: {}, you: null, ask: null, entries: [], lastDay: null,
   faults: {},          // 座位号 → 本局"没做成"的次数（夜里用 0 记匿名）
   knownRoles: {},      // 导演模式点开过的身份（seat → 角色名）
+  tags: {},            // 本机座位标签（seat → 狼/好/待定）；只给自己看
+  tagMode: false,      // 「🏷 标签」模式：点座位号轮换标签
   table: { hidden: lsGet('wolf.table') === '0', settle: null },
             pick: { mock: null, board: null, seat: null },
             voice: { on: false },
@@ -1701,6 +1721,7 @@ function resetStartButton() {
 // 对局级状态统一重置（第 5 轮外审结构建议）：以前三处各抄一份，新增字段必漏一处。
 function resetMatchState() {
   S.faults = {}; S.faultWhy = {}; S.knownRoles = {}; S.table.settle = null;
+  S.tags = {}; S.tagMode = false;
   S.entries = []; S.lastDay = null; S.you = null; lastEnd = null;
   $('feed').innerHTML = ''; $('thinking').textContent = '';
 }
@@ -3319,9 +3340,15 @@ function renderTable() {
     if (r.role) el.dataset.role = r.role;
     el.style.left = pos[i].x + '%';
     el.style.top = pos[i].y + '%';
+    const tag = (S.tags || {})[r.id] || '';
     el.innerHTML = `<span class="ts-no">${r.id}</span><span class="ts-role">${r.role || ''}</span>`
+      + (tag ? `<span class="ts-tag" style="color:${tag === '狼' ? 'var(--bad)'
+        : tag === '好' ? 'var(--good)' : 'var(--accent)'}">${escapeHtml(tag)}</span>` : '')
       + (r.dead && !r.alive ? `<span class="ts-dead">${escapeHtml(r.dead)}</span>` : '');
-    if (st.running && S.status.director && !MP.guest) {
+    if (S.tagMode) {
+      el.classList.add('peek');
+      el.onclick = () => cycleSeatTag(r.id);
+    } else if (st.running && S.status.director && !MP.guest) {
       el.classList.add('peek');
       el.onclick = () => send({ type: 'director_peek', seat: r.id });
     }
@@ -3348,6 +3375,15 @@ function renderTable() {
   $('tableHint').textContent = lines.length ? `放逐票 ${lines.length} 张（第 ${maxRound} 轮）` : '';
 }
 
+function cycleSeatTag(id) {
+  const cur = (S.tags && S.tags[id]) || '';
+  const next = cur === '' ? '狼' : cur === '狼' ? '好' : cur === '好' ? '?' : '';
+  if (!S.tags) S.tags = {};
+  if (next) S.tags[id] = next; else delete S.tags[id];
+  renderHeader();
+  renderTable();
+}
+
 function renderHeader() {
   const st = S.status;
   if (st.running) $('title').textContent = `第 ${st.day} 天 · ${st.phase === 'night' ? '夜晚' : '白天'}`;
@@ -3363,6 +3399,13 @@ function renderHeader() {
     autoBtn.style.color = st.auto_butler ? 'var(--accent)' : '';
     autoBtn.style.borderColor = st.auto_butler ? 'rgba(228,192,124,.65)' : '';
   }
+  const tagsBtn = $('btnTags');
+  if (tagsBtn) {
+    tagsBtn.style.display = st.running ? '' : 'none';
+    tagsBtn.textContent = S.tagMode ? '🏷 标签：开' : '🏷 标签：关';
+    tagsBtn.style.color = S.tagMode ? 'var(--accent)' : '';
+    tagsBtn.style.borderColor = S.tagMode ? 'rgba(228,192,124,.65)' : '';
+  }
   $('btnReview').style.display = canAdmin ? '' : 'none';
   if (!st.running) resetAbandonButton();
 
@@ -3377,13 +3420,20 @@ function renderHeader() {
       el.className = 'chip ' + (s.alive ? 'alive' : 'dead') + (s.is_human ? ' me' : '');
       const shown = s.alive ? '' : (deadRole[s.id] || '');
       const fnum = Number((S.faults || {})[s.id] || 0);
+      const tag = (S.tags || {})[s.id] || '';
       el.textContent = s.id + '号' + (s.name ? ' ' + s.name : '') +
         (s.is_human ? '(你)' : '') + (shown ? '·' + shown : '') +
-        (fnum ? ` ⚠${fnum}` : '');
+        (tag ? '·' + tag : '') + (fnum ? ` ⚠${fnum}` : '');
+      if (tag) el.style.color = tag === '狼' ? 'var(--bad)'
+        : tag === '好' ? 'var(--good)' : 'var(--accent)';
       if (s.name) el.title = `${s.id}号 的角色卡姓名：${s.name}`;
       if (shown) el.title = `${s.id}号 出局时亮出身份：${shown}`;
       if (fnum) el.title = `${s.id}号 本局有 ${fnum} 步没做成：${(S.faultWhy || {})[s.id] || '模型调用失败，已按规则随机处理'}`;
-      if (st.running && S.status.director && !MP.guest) {
+      if (S.tagMode) {
+        el.style.cursor = 'pointer';
+        el.title = `${s.id}号：点一下轮换标签（狼 → 好 → 待定 → 无，只在本机）`;
+        el.onclick = () => cycleSeatTag(s.id);
+      } else if (st.running && S.status.director && !MP.guest) {
         el.style.cursor = 'pointer';
         el.title = `${s.id}号：点一下看身份（导演模式）`;
         el.onclick = () => send({ type: 'director_peek', seat: s.id });
@@ -4368,6 +4418,13 @@ $('btnAutoButler').onclick = () => {
   send({ type: 'auto_butler', on: on });
 };
 
+// 座位标签：只改前端本地状态，不发服务端；点「标签」后再点座位号轮换。
+$('btnTags').onclick = () => {
+  S.tagMode = !S.tagMode;
+  renderHeader();
+  renderTable();
+};
+
 // 语音开关：第一次点必须由用户触发（浏览器规定），所以这里既解锁也开始播
 $('vToggle').onclick = () => (S.voice.on ? VOICE.off() : VOICE.unlock());
 $('vReplay').onclick = () => { const e = VOICE.last; if (e) VOICE.say(e); };
@@ -4802,7 +4859,7 @@ function renderAsk(f, ask) {
   f.appendChild(foldBtn);
 
   //: ⚠️ 2026-10-08 加（自查 P2-2）：**这一手还剩多久**必须写在面板上。
-  //  服务端 `human_timeout` 到点就按「弃权」处理（默认 300 秒），而以前界面上**全程没有**
+  //  服务端 `human_timeout` 到点就按「弃权」处理（默认 900 秒），而以前界面上**全程没有**
   //  任何提示 —— 玩家离开一会儿回来，只看到一条事后的 notice，那一票已经白丢了。
   //  数据不用改协议：`human_timeout` 早就在 status 里（`server.py` 的 `Room.status()`）。
   //  ⚠️ 计时器要跟着面板走：面板被收掉/重画时必须清掉（清理由 `askTimerStop` 统一做，
@@ -5000,7 +5057,7 @@ function renderAsk(f, ask) {
   }
 
   // 狼队讨论（夜里的顺序发言）：必须单独有界面，否则人类狼发不出话、
-  // 整个夜晚阶段会卡到 human_timeout（默认 5 分钟）—— 这是实测踩到的坑。
+  // 整个夜晚阶段会卡到 human_timeout（默认 15 分钟）—— 这是实测踩到的坑。
   if (ask.kind === 'wolf_talk') {
     const ta = document.createElement('textarea');
     ta.placeholder = '说给队友听：你今晚想杀谁、为什么（例：我想刀 4 号，他昨天带票最凶）';
@@ -5477,6 +5534,111 @@ async function openReview(want) {
       + `${escapeHtml(text)}${btn}</div>`;
   }).join('');
 
+  // ── 复盘语义：动作级 action + 一句话 summary + 票型矩阵 / 流程 / 座位标签 ──
+  // 老存档没有 action/summary，下面按 kind/data/text 兜底推；不要求重新打一局。
+  const timeline = (Array.isArray(game.timeline) && game.timeline.length)
+    ? game.timeline
+    : rawLedger.map((e, i) => ({ ...(e || {}), n: (e && e.n !== undefined ? e.n : i) }));
+  const seatIds = (() => {
+    const out = [];
+    for (const s of (game.seats || [])) {
+      const n = Number(s && s.id);
+      if (n > 0) out.push(n);
+    }
+    for (const e of timeline) {
+      for (const n of [Number(e && e.seat), Number(e && e.data && e.data.target)]) {
+        if (n > 0) out.push(n);
+      }
+    }
+    return [...new Set(out)].sort((a, b) => a - b);
+  })();
+  const tagKey = 'wolf-review-tags:' + name;
+  let tags = {};
+  try {
+    const saved = JSON.parse(localStorage.getItem(tagKey) || '{}');
+    if (saved && typeof saved === 'object') tags = saved;
+  } catch (e) { /* 坏数据就当没标过 */ }
+  const TAG_NEXT = { '': '狼', '狼': '好', '好': '?', '?': '' };
+  const tagText = t => t || '·';
+  const tagColor = t => t === '狼' ? 'var(--bad)' : t === '好' ? 'var(--good)'
+    : t === '?' ? 'var(--accent)' : 'var(--dim)';
+  function voteOf(e) {
+    const d = (e && e.data) || {};
+    let target = d.target;
+    if (target === undefined || target === null) {
+      const m = String((e && e.text) || '').match(/投给\s*(\d+)\s*号/);
+      if (m) target = Number(m[1]);
+    }
+    const txt = String((e && e.text) || '');
+    const invalid = !!d.invalid || /无效票|无效（/.test(txt) || /弃权/.test(txt);
+    const n = Number(target);
+    return { target: Number.isFinite(n) && n > 0 ? n : null, invalid };
+  }
+  function seatTagButtons() {
+    return seatIds.map(id => `<button class="rvtag" data-tag="${id}" `
+      + `style="color:${tagColor(tags[id])}">${id}号 ${escapeHtml(tagText(tags[id]))}</button>`).join('');
+  }
+  function matrixHtml(votes, title) {
+    if (!votes.length) return '';
+    const groups = new Map();
+    for (const e of votes) {
+      const day = e.day == null ? '?' : e.day;
+      const round = Number((e.data && e.data.round) || 1);
+      const key = day + '|' + round;
+      if (!groups.has(key)) groups.set(key, { day, round, by: {} });
+      groups.get(key).by[Number(e.seat)] = voteOf(e);
+    }
+    const rows = [...groups.values()].sort((a, b) =>
+      (Number(a.day) - Number(b.day)) || (a.round - b.round));
+    const head = `<tr><th>天/轮</th>${seatIds.map(id =>
+      `<th><button class="rvtag" data-tag="${id}" style="color:${tagColor(tags[id])}">`
+      + `${id}号<br>${escapeHtml(tagText(tags[id]))}</button></th>`).join('')}</tr>`;
+    const body = rows.map(g => {
+      const cells = seatIds.map(id => {
+        const v = g.by[id];
+        if (!v) return '<td>·</td>';
+        if (v.invalid || v.target == null) return '<td class="inv">弃/无</td>';
+        return `<td class="${v.target === id ? 'hit' : ''}">${v.target}号</td>`;
+      }).join('');
+      return `<tr><td>${escapeHtml(g.day)}天·${g.round}</td>${cells}</tr>`;
+    }).join('');
+    return `<details class="rvsec" open><summary>${escapeHtml(title)}（点座位号可标狼/好/待定）</summary>`
+      + `<div class="rvtagrow">${seatTagButtons()}</div>`
+      + `<div style="overflow:auto"><table class="rvmatrix">${head}${body}</table></div></details>`;
+  }
+  function flowHtml() {
+    const groups = new Map();
+    for (const e of timeline) {
+      if (!e || !['night', 'announce', 'speech', 'vote', 'claim'].includes(e.kind)) continue;
+      const key = (e.day == null ? '?' : e.day) + '|' + (e.phase || '');
+      if (!groups.has(key)) groups.set(key, { day: e.day, phase: e.phase, kinds: {} });
+      const g = groups.get(key);
+      g.kinds[e.kind] = (g.kinds[e.kind] || 0) + 1;
+    }
+    if (!groups.size) return '';
+    const rows = [...groups.values()].sort((a, b) =>
+      (Number(a.day) - Number(b.day)) || String(a.phase).localeCompare(String(b.phase)));
+    return `<details class="rvsec" open><summary>流程（按天/阶段）</summary><div class="rvflow">`
+      + rows.map(g => {
+        const bits = [];
+        if (g.kinds.announce) bits.push(`公告×${g.kinds.announce}`);
+        if (g.kinds.speech) bits.push(`发言×${g.kinds.speech}`);
+        if (g.kinds.vote) bits.push(`投票×${g.kinds.vote}`);
+        if (g.kinds.claim) bits.push(`声明×${g.kinds.claim}`);
+        if (!bits.length) bits.push('夜间行动');
+        return `<div class="flowrow"><span class="flowday">${escapeHtml(g.day == null ? '?' : g.day)}天</span>`
+          + `<span class="flowphase">${g.phase === 'night' ? '夜' : '日'}</span>`
+          + bits.map(x => `<span class="flowchip">${escapeHtml(x)}</span>`).join('') + '</div>';
+      }).join('') + '</div></details>';
+  }
+  const exileVotes = timeline.filter(e => e && e.kind === 'vote'
+    && !(e.data && e.data.sheriff_vote));
+  const sheriffVotes = timeline.filter(e => e && e.kind === 'vote'
+    && e.data && e.data.sheriff_vote);
+  const matrixBlock = matrixHtml(exileVotes, '放逐票型')
+    + matrixHtml(sheriffVotes, '警长竞选票型');
+  const flowBlock = flowHtml();
+
   // 存档选单：留几局就列几局（默认 10），点一下看那一局
   const picker = (list.games || []).slice(-12).reverse().map(g =>
     `<button class="ghost" data-game="${escapeHtml(g)}" `
@@ -5496,6 +5658,8 @@ async function openReview(want) {
     + `${game.aborted ? ' · 已放弃' : ''} · 留档语音 ${escapeHtml(game.audio_count || 0)} 条`
     + `${lite ? ' · <b>首屏用轻量口径</b>（只带列表，点开才取完整思维链）' : ''}</div>`
     + `<div style="margin-bottom:8px">${picker}</div>`
+    + matrixBlock
+    + flowBlock
     + `<div style="font-weight:600;margin:6px 0 4px">这一局的发言（点 🔊 放存档里留的那份音频，绝不重新合成）</div>`
     + (speechRows || '<div class="hint">这一局没有发言记录</div>')
     + `<div style="font-weight:600;margin:12px 0 4px">调用留痕（${shown.length} 条${calls.length > shown.length ? `，共 ${calls.length} 条` : ''}`
@@ -5641,6 +5805,21 @@ async function openReview(want) {
     if (!holder) return;
     if (holder.dataset.loaded === '1' && !holder.hidden) { holder.hidden = true; return; }
     await fillDetail(row);
+  });
+
+  // 点座位打标签：只写本机 localStorage，不发给服务端，也不影响对局。
+  // 轮换顺序：无 → 狼 → 好 → 待定 → 无。
+  box.querySelectorAll('[data-tag]').forEach(btn => {
+    btn.onclick = () => {
+      const id = String(btn.getAttribute('data-tag') || '');
+      if (!id) return;
+      tags[id] = TAG_NEXT[tags[id] || ''] || '';
+      try { localStorage.setItem(tagKey, JSON.stringify(tags)); } catch (e) { /* 隐私模式忽略 */ }
+      box.querySelectorAll('[data-tag="' + id + '"]').forEach(b => {
+        b.textContent = id + '号 ' + tagText(tags[id]);
+        b.style.color = tagColor(tags[id]);
+      });
+    };
   });
 
   const sw = box.querySelector('[data-chain-only]');

@@ -647,7 +647,7 @@ class Room:
         #: 以前硬编码 1，结果是"配置里写了 6 号，手机上不选座位就坐到 1 号去了"
         #: （1 号有人设有模型，等于把 AI 挤掉一个、自己坐错位置）。
         self.human_seat = max(1, int(self.game_cfg.get("human_seat") or 1))
-        self.human_timeout = float(self.game_cfg.get("human_timeout", 300))
+        self.human_timeout = float(self.game_cfg.get("human_timeout", 900))
         #: 上游挂住时的两层保险（秒）：单次硬上限 / 整手预算。
         #: ⚠️ **建局与 status 必须用同一对数**（2026-10-08 收敛）：以前这里是 150、
         #:    status 那边是 300 —— 配置里漏写键名时，手机会显示一个引擎根本不会遵守的秒数
@@ -696,8 +696,8 @@ class Room:
         self.join_code = self._load_or_make_join_code()
         #: 这一局是不是联机局（有人在房间里 → True）。单人局保持 False，旧行为不变。
         self.multiplayer = False
-        #: 联机局等真人的上限：单人 300 秒（默认），联机时一个人去倒水就会晾住全场。
-        self.human_timeout_solo = int(self.game_cfg.get("human_timeout", 300))
+        #: 联机局等真人的上限：单人 900 秒（默认，允许长考），联机时一个人去倒水就会晾住全场。
+        self.human_timeout_solo = int(self.game_cfg.get("human_timeout", 900))
         self.multiplayer_timeout = int(self.game_cfg.get("multiplayer_human_timeout", 180))
         self.human_timeout = self.human_timeout_solo
         #: 房间大厅里主机正在挑的板子（还没开局时给访客看座位数用）。
@@ -987,6 +987,11 @@ class Room:
             "day": entry.day, "kind": entry.kind, "seat": entry.seat,
             "text": entry.text, "private": "public" not in entry.visible_to,
             "n": idx,
+            "action": getattr(entry, "action", entry.kind),
+            "summary": getattr(entry, "summary", ""),
+            "data": {k: entry.data[k] for k in
+                     ("target", "round", "sheriff_vote", "invalid", "prefetched")
+                     if isinstance(getattr(entry, "data", None), dict) and k in entry.data},
             "say": _say_ok(entry.kind, entry.seat, entry.visible_to,
                            getattr(me, "camp", "")) and entry.seat != me.id,
         }}
@@ -996,6 +1001,11 @@ class Room:
         return {"type": "entry", "entry": {
             "day": entry.day, "kind": entry.kind, "seat": entry.seat,
             "text": entry.text, "private": False, "n": idx,
+            "action": getattr(entry, "action", entry.kind),
+            "summary": getattr(entry, "summary", ""),
+            "data": {k: entry.data[k] for k in
+                     ("target", "round", "sheriff_vote", "invalid", "prefetched")
+                     if isinstance(getattr(entry, "data", None), dict) and k in entry.data},
             "say": _say_ok(entry.kind, entry.seat, entry.visible_to, ""),
         }}
 
@@ -3907,6 +3917,7 @@ def _lite_game(data: dict) -> dict:
       · 元信息（板子/天数/结果/语音条数）；
       · `ledger` 里 **kind=speech** 的行（day/seat/text/audio）—— 复盘要列出这一局的发言、
         并且给每条挂一个 🔊（`audio` 为真才有）；
+      · `timeline`：全量台账的**轻量**版（动作/summary/投票 data），给票型矩阵与流程图用；
       · `transcript` 每条只留 `_LITE_CALL_KEYS` + 一行回复摘要 + `reasoning_len`（长度，不是内容！）
         + `i`（它在原始 transcript 里的下标 —— 点开那一条就靠它去取全文）。
     另外标一个 `lite: true`：前端据此知道"这是轻量口径、全文要按需再取"。
@@ -3921,12 +3932,34 @@ def _lite_game(data: dict) -> dict:
         item["reasoning_len"] = len(str(row.get("reasoning") or ""))
         rows.append(item)
     speech: list[dict] = []
+    timeline: list[dict] = []
     for n, entry in enumerate(data.get("ledger") or []):
-        if not isinstance(entry, dict) or entry.get("kind") != "speech":
+        if not isinstance(entry, dict):
             continue
-        speech.append({"n": n, "kind": "speech", "day": entry.get("day"),
-                       "seat": entry.get("seat"), "text": entry.get("text"),
-                       "audio": bool(entry.get("audio"))})
+        kind = entry.get("kind")
+        compact = {"n": n, "kind": kind, "day": entry.get("day"),
+                   "phase": entry.get("phase"), "seat": entry.get("seat"),
+                   "text": entry.get("text"),
+                   "action": entry.get("action") or kind,
+                   "summary": entry.get("summary") or "",
+                   "audio": bool(entry.get("audio"))}
+        if kind == "vote":
+            raw = entry.get("data") or {}
+            compact["data"] = {k: raw.get(k) for k in
+                               ("target", "round", "sheriff_vote", "invalid")
+                               if k in raw}
+        timeline.append(compact)
+        if kind == "speech":
+            speech.append({"n": n, "kind": "speech", "day": entry.get("day"),
+                           "seat": entry.get("seat"), "text": entry.get("text"),
+                           "audio": bool(entry.get("audio"))})
+    compact_seats = []
+    for s in (data.get("seats") or []):
+        if not isinstance(s, dict):
+            continue
+        compact_seats.append({k: s.get(k) for k in
+                              ("id", "role", "is_human", "alive", "death_day", "death_cause")
+                              if k in s})
     return {
         "lite": True,
         "name": None,                       # 调用方补（存档名不在文件里）
@@ -3938,7 +3971,10 @@ def _lite_game(data: dict) -> dict:
         "started_at": data.get("started_at"),
         "audio_count": data.get("audio_count"),
         "call_count": len(data.get("transcript") or []),
+        "sheriff_id": data.get("sheriff_id"),
+        "seats": compact_seats,
         "ledger": speech,
+        "timeline": timeline,
         "transcript": rows,
     }
 
