@@ -46,6 +46,7 @@ tests/tmp/
 dist-play/
 # 桌面客户端产物（52MB+，只发布不上库）
 dist-exe/
+dist-网盘-*/
 dist-itch/               # itch 物料（封面/截图/上传包），只发布不上库
 dist-ab/                 # 模型/上下文 A/B 原始数据（题库、判分、对话），只在本机
 dist/
