@@ -30,6 +30,10 @@ import zipfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, ROOT)
+try:                                   # Windows 控制台默认 GBK，打印 ✅ 会 UnicodeEncodeError
+    sys.stdout.reconfigure(encoding="utf-8")
+except Exception:                      # noqa: BLE001
+    pass
 
 from tools.release_rules import sanitize_config                       # noqa: E402
 

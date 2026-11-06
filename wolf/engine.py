@@ -2229,6 +2229,10 @@ class Game:
         # 它能看到「到目前为止所有人的发言」，所以每个人的判断都是最新的。
         # 没拿到正文时（真人座位 / 关着 decision_first / 模型这次没写 speech）才退回
         # "单独问一次发言"：绝不能用决策里的字段拼一句假话写进台账。
+        # ⚠️ 2026-11-07 核对：A 的发言落账后，下一轮循环**立即**启动 B 的 `speech_plan`；
+        #    实测只差约 0.05ms，A 的 TTS 播放期间 B 的模型请求已经在跑 —— **不要**再另做
+        #    “模型预取/提前发 B 的请求”，那会重复调用。真正还能预取的是 B 的 TTS 合成/下载，
+        #    已在 `web/index.html` 的 `VOICE.prefetchNext` 里做（A 在播时先取 B 的音频）。
         decisions: dict[int, dict] = {}
         for seat in self.speech_order():
             if not seat.alive:

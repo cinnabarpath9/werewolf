@@ -8,7 +8,8 @@
 | 脚本 | 用途 | 什么时候用 |
 |---|---|---|
 | `build_release.py` | 组装运行包（`--flavor desktop/android --zip`） | 发版 |
-| `check_release.py` | 发布包自检：必备文件 / 密钥扫描 / `config.yaml` 能否解析 | 发版前、打包后 |
+| `check_release.py` | 发布包自检：必备文件 / 密钥扫描 / `config.yaml` 能否解析 / 玩家可见文本 | 发版前、打包后 |
+| `check_player_text.py` | 玩家可见文本 lint（页面/标题里的 `packet`、`frag:` 等工程词），`check_release.py` 会调用 | 改 UI 文案后、发版前 |
 | `release_rules.py` | 清洗规则（阵容清空 / 兜底档案 / 个人串），打包与镜像共用 | 被上面两个调用 |
 | `build_exe.py` | Windows 客户端（PyInstaller onedir）+ itch zip | 发客户端 |
 | `build_play_site.py` | 静态试玩站（`dist-play/` + `werewolf-<版本>-在线试玩站.zip`） | 发 Pages/静态托管 |

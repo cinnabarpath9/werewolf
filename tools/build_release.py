@@ -79,6 +79,7 @@ TOOLS_KEEP = (
     "voice_check.py",     # 语音连通性自检
     "build_release.py",   # 想自己再打包的人用得上
     "check_release.py",   # 打包后的复检
+    "check_player_text.py",  # 复检时一并查页面文案里的工程词（check_release 调用）
     "exam_paper.py",      # 模型考试脚本（三套卷）
     "exam_papers.json",   # 考试题库（60 题）
 )

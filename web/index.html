@@ -3196,6 +3196,9 @@ function flushOutbox() {
 function handle(m) {
   switch (m.type) {
     case 'status':
+      // 新一局开始：上一局的语音队列/预取必须清掉。它们的键是台账序号 n，新局会从 0 重数；
+      // 不清的话，新局同 n 的发言可能直接播上一局预取的音频。
+      if (!(S.status && S.status.running) && m.running) voiceQueueClear();
       S.status = m;
       if (m.last_save) {
         S.lastSave = m.last_save;
@@ -3716,7 +3719,8 @@ function voiceQueuePush(entry) {
   if (VOICE_Q.list.some(x => x.n === entry.n)) return;      // 同一条不重复排
   VOICE_Q.list.push(entry);
   while (VOICE_Q.list.length > VOICE_QUEUE_MAX) {           // 落后太多：丢最旧的
-    VOICE_Q.list.shift();
+    const dropped = VOICE_Q.list.shift();
+    VOICE.forget(dropped);                                 // 预取到一半的也一起丢
     VOICE_Q.dropped += 1;
   }
   if (VOICE_Q.dropped && VOICE_Q.list.length === VOICE_QUEUE_MAX) {
@@ -3724,6 +3728,7 @@ function voiceQueuePush(entry) {
     VOICE_Q.dropped = 0;
     toast(`语音落后太多，跳过了 ${was} 条`, true);
   }
+  VOICE.prefetchNext();                                    // 先取队首的音频（常常就是正在等的那条）
   voiceQueuePump();
 }
 
@@ -3742,6 +3747,7 @@ async function voiceQueuePump() {
     while (VOICE_Q.list.length) {
       if (!VOICE.on) { VOICE_Q.list.length = 0; break; }     // 关掉语音就停（先判再取，别白丢一条）
       const e = VOICE_Q.list.shift();
+      VOICE.prefetchNext();                                  // A 在播时，先把 B 的音频取回来
       const $now = $('vNow');
       if ($now) $now.textContent = `${e.seat}号 正在念…`;
       try {
@@ -3764,6 +3770,13 @@ const VOICE = (() => {
   // ⚠️ 队列要用它：`play()` 的 promise 在**开始播**时就 resolve，不是播完。
   //    所以对外暴露的 speak 必须等 ended/error —— 否则下一条会立刻把上一条掐掉。
   let lastEnded = null, endResolve = null;
+  //: 语音预取：A 在播时就把 B 的 `/api/tts` 请求发出去，把音频先拿回来。
+  //  ⚠️ 模型预取已经是现状（B 的发言决策在 A 的发言落账后立即开始，见 engine.day_phase），
+  //     这里补的是**另一段真实等待**：B 的 TTS 合成/下载原本要等轮到 B 才开始，
+  //     现在和 A 的播放重叠。缓存键/隔离仍由 `/api/tts` 自己把关。
+  let prefetchGen = 0;
+  let currentPrefetchCtrl = null;  // 已被 say 取走、但还没结束的预取也要能被 stop 取消
+  const prefetched = new Map();  // n -> {promise, ctrl}
 
   function releaseUrl() {
     if (objUrl) { try { URL.revokeObjectURL(objUrl); } catch (e) {} objUrl = null; }
@@ -3818,6 +3831,15 @@ const VOICE = (() => {
     // ⚠️ 只 pause 是拦不住"在飞的"那条的：请求回来照样 play。
     // 所以这里也要作废（token++），但**不改开关状态** —— 切后台/关一条不等于关掉语音。
     token++;
+    prefetchGen++;
+    if (currentPrefetchCtrl) {
+      try { currentPrefetchCtrl.abort(); } catch (e) {}
+      currentPrefetchCtrl = null;
+    }
+    for (const it of prefetched.values()) {
+      try { it.ctrl.abort(); } catch (e) {}
+    }
+    prefetched.clear();
     playing = null;
     try { audio.pause(); } catch (e) {}
     try { audio.removeAttribute('src'); } catch (e) {}
@@ -3833,6 +3855,49 @@ const VOICE = (() => {
     else beep(523, 0.09);
   }
 
+  async function fetchTTS(e, signal) {
+    const res = await fetch(`/api/tts?n=${e.n}` + (sessionToken() ? '&token=' + encodeURIComponent(sessionToken()) : ''),
+                            { headers: apiHeaders(), signal });
+    if (!res.ok) {
+      let why = `HTTP ${res.status}`;
+      try { why = (await res.json()).error || why; } catch (err) {}
+      throw new Error(why);
+    }
+    return await res.blob();
+  }
+
+  // 把**队首**那条的音频先取回来；已经在播/已经取过就不重复。
+  function prefetchNext() {
+    if (!S.voice.on || !VOICE_Q.list.length) return;
+    const e = VOICE_Q.list[0];
+    if (!e || e.n === undefined || e.n === null) return;
+    if (prefetched.has(e.n)) return;
+    if (playing && playing.entry && playing.entry.n === e.n) return;
+    const gen = prefetchGen;
+    const ctrl = new AbortController();
+    const promise = fetchTTS(e, ctrl.signal)
+      .then(b => (gen === prefetchGen ? b : null))
+      .catch(() => null);
+    prefetched.set(e.n, { promise, ctrl });
+  }
+
+  // 取出预取结果（不等待；没有就返回 null，让 say 走正常请求）。
+  function takePrefetch(e) {
+    if (!e || e.n === undefined || e.n === null) return null;
+    const it = prefetched.get(e.n);
+    if (!it) return null;
+    prefetched.delete(e.n);
+    return it;                                  // {promise, ctrl}：say 用它接管取消权
+  }
+
+  function forget(e) {
+    if (!e || e.n === undefined || e.n === null) return;
+    const it = prefetched.get(e.n);
+    if (!it) return;
+    try { it.ctrl.abort(); } catch (err) {}
+    prefetched.delete(e.n);
+  }
+
   async function say(e) {
     last = e;
     $('vReplay').hidden = false;
@@ -3842,14 +3907,15 @@ const VOICE = (() => {
     releaseUrl();                           // 赋新 src 之前先回收上一条的 blob 地址
     $('vNow').textContent = `${e.seat}号 正在说话…`;
     try {
-      const res = await fetch(`/api/tts?n=${e.n}` + (sessionToken() ? '&token=' + encodeURIComponent(sessionToken()) : ''),
-                              { headers: apiHeaders() });
-      if (!res.ok) {
-        let why = `HTTP ${res.status}`;
-        try { why = (await res.json()).error || why; } catch (err) {}
-        throw new Error(why);
+      let blob = null;
+      const pre = takePrefetch(e);          // A 在播时已经取回来的 B，直接用
+      if (pre) {
+        currentPrefetchCtrl = pre.ctrl;   // 已被取走也要能被 stop 取消
+        try { blob = await pre.promise; } catch (err) { blob = null; }
+        finally { if (currentPrefetchCtrl === pre.ctrl) currentPrefetchCtrl = null; }
       }
-      const blob = await res.blob();
+      if (seq !== token) return 'aborted';   // 等预取期间被 stop/换人了
+      if (!blob) blob = await fetchTTS(e);   // 没预取到（失败/被清）就走正常请求
       if (seq !== token) return 'aborted';  // 已经换人了/被 stop 了，这条丢掉（这就是"只播当前说话人"）
       releaseUrl();
       objUrl = URL.createObjectURL(blob);
@@ -3895,8 +3961,8 @@ const VOICE = (() => {
     if (how !== 'playing') doneResolve();   // 不会再等到 ended：这条到此为止
     await done;
   }
-  return { unlock, off, stop, cue, say, speak, get on() { return S.voice.on; },
-           get last() { return last; } };
+  return { unlock, off, stop, cue, say, speak, prefetchNext, forget,
+           get on() { return S.voice.on; }, get last() { return last; } };
 })();
 
 function onVoiceEntry(e, replay) {
@@ -4200,9 +4266,9 @@ const MIC = (() => {
            get recording() { return !!(recorder && recorder.state === 'recording'); } };
 })();
 
-//: 造一个"按住说话"式的麦克风按钮（实际是点一下开始、再点一下结束，手机上更稳）
+//: 造一个点按式麦克风按钮（点一下开始、再点一下结束；不跟手指长按，手机上更稳）
 function mkMic(opts) {
-  const idle = opts.idle || '🎤 按住说话';
+  const idle = opts.idle || '🎤 点一下说话';
   const b = mkBtn(idle, null, 'ghost');
   b.style.width = '100%';
   b.style.marginTop = '8px';
@@ -5805,9 +5871,9 @@ async function openReview(want, opts) {
       ? `<pre class="chain" data-chain>${escapeHtml(chain)}</pre>`
       : `<div class="rvload">这一条没有思维链（模型没开思考，或这一手是人工操作）。</div>`;
     const extra = onlyChain ? '' : (
-      `<details style="margin-top:6px"><summary>它当时收到的上下文（packet，可能很长）</summary>`
+      `<details style="margin-top:6px"><summary>它当时收到的完整上下文（可能很长）</summary>`
       + `<pre class="chain">${escapeHtml(String(j.packet || '（没有记录）'))}</pre></details>`
-      + `<details style="margin-top:6px"><summary>它当时给出的原始回复（raw / reply）</summary>`
+      + `<details style="margin-top:6px"><summary>它当时给出的原始回复</summary>`
       + `<pre class="chain">${escapeHtml(String(j.raw || ''))}`
       + `${j.raw ? '\n\n' : ''}${escapeHtml(typeof j.reply === 'string' ? j.reply : JSON.stringify(j.reply, null, 2) || '')}</pre></details>`);
     return head + chainBlock + extra
@@ -6023,7 +6089,7 @@ async function openPersonas() {
     + sec('你的定位（通用提示词，人人一样）', guide.player_prompt || '',
           '改 <code>config.yaml</code> 的 <code>game.player_prompt</code> —— ⚠️ 这段来自 config，**改完要重启服务**才生效')
     + sec('打法书（按角色发：通用 + 你这个角色）', guide.playbook || '', '改 <code>werewolf\\content\\打法书.md</code> —— .md 是每次建包现读的，**下一局生效、不用重启**')
-    + sec('概念与概率（按阵营发：位置概率 + 屠边账/穿衣服）', guide.meta || '', '改 <code>werewolf\\content\\概念库.md</code> 里的 frag:meta 段落 —— 同样**下一局生效、不用重启**')
+    + sec('概念与概率（按阵营发：位置概率 + 屠边账/穿衣服）', guide.meta || '', '改 <code>werewolf\\content\\概念库.md</code> 里的「概念与概率」段落 —— 同样**下一局生效、不用重启**')
     + (warn ? `<div style="margin:8px 0">${warn}</div>` : '')
     + (rows ? `<div class="hint" style="margin-top:10px"><b>另外还加载了座位角色卡</b>（人设）：</div>${rows}`
             : `<div class="hint" style="margin-top:10px">座位角色卡（人设）<b>现在没加载</b> ——`

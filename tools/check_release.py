@@ -16,13 +16,15 @@
 
 退出码：0 通过；1 有违规；2 路径不存在。
 
-判据分三级
+判据分四层
 ----------
 ERROR（一定不能发布）：.env / 配对码.txt / 联机码.txt / games/ 或 game-*.json / docs/ / tests/ /
         __pycache__ / .git / reports/ / var/ / _junk / 疑似真实密钥
 WARN （建议清掉，不拦）：addons/ / *.log / .DS_Store / Thumbs.db
 必备（缺了跑不起来）：server.py / run_game.py / config.yaml / web/index.html /
         wolf/__init__.py / content/01_规则书.md
+玩家可见文本：web/index.html 的中文串 / web/site.json 里不许出现 packet、frag: 等工程词
+        （由 check_player_text.py 扫；见该文件头部对“哪些字段算玩家可见”的界定）
 """
 from __future__ import annotations
 
@@ -92,6 +94,7 @@ PERSONAL_PATTERNS = [
 #: 疑似真实密钥（占位符 ${X} / xxx / <your-key> 不会命中：它们不是 24+ 位的字母数字串）
 # 2026-11-03 审查 P1-9：规则与清洗端共用一份（tools/release_rules.py）
 from release_rules import ALLOWED_DEFAULT_PROFILES, KEY_PATTERNS  # noqa: E402
+import check_player_text  # noqa: E402
 
 
 class Result:
@@ -245,11 +248,12 @@ def main(argv: list[str]) -> int:
     print(f"== 发布检查：{target} ==")
     print(f"   文件数：{len(paths)}" + ("（zip）" if is_zip else ""))
     res = scan(paths, read)
+    text_hits = check_player_text.scan(paths, read)
     if zf is not None:
         zf.close()
 
     missing = [] if no_required else check_required(paths)
-    print("\n[1/2] 必备文件")
+    print("\n[1/4] 必备文件")
     if no_required:
         print("  SKIP  --no-required")
     elif missing:
@@ -259,7 +263,7 @@ def main(argv: list[str]) -> int:
 
     # ⚠️ 2026-11-04 事故：清洗把 config.yaml 的缩进弄坏，包能打出来但装上新机器起不来。
     #    这里对**打好的包**再验一次：配置必须能解析、阵容必须空。
-    print("\n[2/3] config.yaml 能解析")
+    print("\n[2/4] config.yaml 能解析")
     cfg_problem = ""
     if no_required:
         print("  SKIP  --no-required")
@@ -298,7 +302,7 @@ def main(argv: list[str]) -> int:
                 cfg_problem = f"YAML 解析失败：{type(exc).__name__}: {exc}"
         print(f"  FAIL  {cfg_problem}" if cfg_problem else "  PASS  可解析、阵容为空")
 
-    print("\n[3/3] 不该带出门的东西")
+    print("\n[3/4] 不该带出门的东西")
     if res.errors:
         print(f"  FAIL  {len(res.errors)} 项违规：")
         for p, why in res.errors[:40]:
@@ -313,7 +317,18 @@ def main(argv: list[str]) -> int:
         for p, why in res.warns[:10]:
             print(f"        - {p}    （{why}）")
 
-    bad = bool(res.errors) or bool(missing) or bool(cfg_problem)
+    print("\n[4/4] 玩家可见文本（页面/标题里的工程词）")
+    if text_hits:
+        print(f"  FAIL  {len(text_hits)} 处：")
+        for p, line, term, snippet in text_hits[:20]:
+            where = f"{p}:{line}" if line else p
+            print(f"        - {where}    [{term}] {snippet}")
+        if len(text_hits) > 20:
+            print(f"        …… 还有 {len(text_hits) - 20} 处")
+    else:
+        print("  PASS  没有工程词")
+
+    bad = bool(res.errors) or bool(missing) or bool(cfg_problem) or bool(text_hits)
     print()
     if bad and not warn_only:
         print("结论：不能发布 ❌")

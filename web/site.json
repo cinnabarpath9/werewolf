@@ -1,9 +1,9 @@
-﻿{
+{
   "repo": "https://github.com/cinnabarpath9/werewolf",
   "qq_group": "",
   "qq_link": "https://qm.qq.com/q/68VcRJr3Py",
   "author": "cinnabarpath9",
-  "version": "1.2.34",
+  "version": "1.2.35",
   "afdian": "https://afdian.com/a/langrensha",
   "pans": [
     { "name": "夸克网盘", "url": "https://pan.quark.cn/s/00bf04be5c63" },
