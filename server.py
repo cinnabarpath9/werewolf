@@ -601,6 +601,10 @@ def _say_ok(kind: str, seat, visible_to, human_camp: str) -> bool:
     return False
 
 
+#: 台账 entry.data 允许进前端的键。实时/历史/轻量复盘共用一份，避免三处漂移。
+_ENTRY_DATA_KEYS = ("target", "round", "sheriff_vote", "invalid", "prefetched")
+
+
 class Room:
     """单房间：只有你一个人玩，所以全局就一个实例。"""
 
@@ -630,6 +634,8 @@ class Room:
         #: 每局重置；可在游戏页随时开/关（关闭会取消正在跑的那一手）。
         self.auto_butler_seats: set[int] = set()
         self.auto_butler_tasks: dict[int, asyncio.Task] = {}
+        #: 所有托管调用（手动/自动）的在途座位；手动连点/自动+手动并发都靠它去重。
+        self.butler_inflight: set[int] = set()
         #: 「轮到你」的报文序号（单调递增，新局重置）。客户端把它原样回传，
         #: 服务端在 `ask_done` 里带回同一个 id —— 客户端据此只清自己那一条面板
         #: （详见 broadcast 里的注释：补发的旧 ask 不许清掉玩家正在操作的新面板）。
@@ -990,8 +996,7 @@ class Room:
             "n": idx,
             "action": getattr(entry, "action", entry.kind),
             "summary": getattr(entry, "summary", ""),
-            "data": {k: entry.data[k] for k in
-                     ("target", "round", "sheriff_vote", "invalid", "prefetched")
+            "data": {k: entry.data[k] for k in _ENTRY_DATA_KEYS
                      if isinstance(getattr(entry, "data", None), dict) and k in entry.data},
             "say": _say_ok(entry.kind, entry.seat, entry.visible_to,
                            getattr(me, "camp", "")) and entry.seat != me.id,
@@ -1004,8 +1009,7 @@ class Room:
             "text": entry.text, "private": False, "n": idx,
             "action": getattr(entry, "action", entry.kind),
             "summary": getattr(entry, "summary", ""),
-            "data": {k: entry.data[k] for k in
-                     ("target", "round", "sheriff_vote", "invalid", "prefetched")
+            "data": {k: entry.data[k] for k in _ENTRY_DATA_KEYS
                      if isinstance(getattr(entry, "data", None), dict) and k in entry.data},
             "say": _say_ok(entry.kind, entry.seat, entry.visible_to, ""),
         }}
@@ -1143,7 +1147,11 @@ class Room:
             return None, f"托管模型「{name}」解析失败：{type(exc).__name__}: {exc}"
         if not (spec.base_url and spec.api_key and spec.model):
             return None, f"托管模型「{name}」缺 base_url / key / model，先去设置里补齐"
-        spec.max_retries = min(int(getattr(spec, "max_retries", 1) or 1), 1)
+        try:
+            _mr = int(getattr(spec, "max_retries", 1))
+        except (TypeError, ValueError):
+            _mr = 1
+        spec.max_retries = max(0, min(_mr, 1))
         if cfg_b.get("temperature") is not None:
             try:
                 spec.temperature = float(cfg_b["temperature"])
@@ -1168,6 +1176,9 @@ class Room:
         return client, ""
 
     def _auto_task_done(self, seat: int, task: asyncio.Task) -> None:
+        inflight = getattr(self, "butler_inflight", None)
+        if inflight is not None:
+            inflight.discard(seat)
         if self.auto_butler_tasks.get(seat) is task:
             self.auto_butler_tasks.pop(seat, None)
         if task.cancelled():
@@ -1188,6 +1199,11 @@ class Room:
             return
         if seat not in self.pending_asks:
             return
+        inflight = getattr(self, "butler_inflight", None)
+        if inflight is None:
+            inflight = self.butler_inflight = set()
+        if seat in inflight:
+            return
         old = self.auto_butler_tasks.get(seat)
         if old is not None and not old.done():
             return
@@ -1197,6 +1213,7 @@ class Room:
             task = asyncio.create_task(self.autopilot(ws, seat, auto=True))
         except RuntimeError:              # 没有运行中的事件循环（测试/退出）；不自动
             return
+        inflight.add(seat)
         self.auto_butler_tasks[seat] = task
         task.add_done_callback(lambda t, s=seat: self._auto_task_done(s, t))
 
@@ -1316,7 +1333,7 @@ class Room:
             try:
                 self.game.faults.append({
                     "day": int(getattr(self.game, "day", 0) or 0),
-                    "phase": "day",
+                    "phase": str(getattr(self.game, "phase", "day") or "day"),
                     "seat": seat,
                     "task": kind,
                     "reason": f"托管失败（已试 {len(names)} 个档案）：{last_err[:300]}",
@@ -2710,12 +2727,17 @@ class Room:
                 self.send_to(ws, {"type": "notice", "text": "只有坐座位的玩家才能托管。"})
             else:
                 task = self.auto_butler_tasks.get(seat)
-                if task is not None and not task.done():
+                inflight = getattr(self, "butler_inflight", None)
+                if inflight is None:
+                    inflight = self.butler_inflight = set()
+                if (task is not None and not task.done()) or seat in inflight:
                     self.send_to(ws, {"type": "notice",
-                                      "text": "🤖 全程托管正在处理这一手，不用重复点。"})
+                                      "text": "🤖 托管正在处理这一手，不用重复点。"})
                 else:
                     # P1-6：后台跑，别把这条连接的读循环堵住
-                    asyncio.create_task(self.autopilot(ws, seat))
+                    task = asyncio.create_task(self.autopilot(ws, seat))
+                    inflight.add(seat)
+                    task.add_done_callback(lambda t, s=seat: self._auto_task_done(s, t))
         elif kind == "action":
             # ⚠️ 2026-10-08 修（自查发现的 P2-1，真协议缺陷）：
             #    客户端回传的 `ask_id` 以前**只被回显、从不校验**。断线时玩家在旧面板上
@@ -3959,8 +3981,7 @@ def _lite_game(data: dict) -> dict:
                    "audio": bool(entry.get("audio"))}
         if kind == "vote":
             raw = entry.get("data") or {}
-            compact["data"] = {k: raw.get(k) for k in
-                               ("target", "round", "sheriff_vote", "invalid")
+            compact["data"] = {k: raw.get(k) for k in _ENTRY_DATA_KEYS
                                if k in raw}
         timeline.append(compact)
         if kind == "speech":
@@ -4156,6 +4177,8 @@ def _settings_payload(data: dict) -> dict:
         "director": bool(data.get("director")),
         "butler": pub.get("butler") or {},
         "persona": pub.get("persona") or {"enabled": False, "seats": {}},
+        "persona_max_total": settings_store.MAX_PERSONA_TOTAL,
+        "persona_limits": dict(settings_store.PERSONA_FIELDS),
         "token_required": True,
         # ⚠️ 2026-10-31 外部审查 S13：以前这里是**绝对路径**（含中文用户名目录），
         #    任何一次 GET 都能拿到；页面根本不用这个字段。现在只回文件名。
