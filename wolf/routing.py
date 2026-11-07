@@ -392,7 +392,7 @@ def build_client(spec: SeatLLM, label: str = "", thinking_style: str | None = No
 def fallback_thinking_for(cfg: dict, profile: str):
     """换手到 `profile` 这家顶班时，该用哪一档思考（`llm.fallback_thinking.<目标档案>`）。
 
-    为什么要有这个口子（2026-10-12 真局实测，存档 `games/game-20261012-105959.json`）：
+    为什么要有这个口子（真局实测，存档只在作者本机，不随仓库）：
     5 号是 `MIMO` + `thinking: low`，第 1 天一次调用顶到 420 秒上限后换 DEEPSEEK 顶班 ——
     替补那一手发的是 `{thinking: {type: enabled}, reasoning_effort: low}`、36.09 秒 /
     5,384 tokens，而同局 DS 的两个**原生**座位（2/8，`thinking: "off"`）只要 1.5~2.0 秒 /

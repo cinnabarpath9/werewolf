@@ -3448,7 +3448,7 @@ def prune_saves(cfg: dict | None = None) -> dict:
 async def api_saved_audio(request: Request, game: str = "", n: str = "-1"):
     """播**存档里**那条发言的语音（复盘用，不再重新合成）。
 
-    `game` 是存档文件名（如 game-20261007-174335.json），`n` 是台账序号。
+    `game` 是存档文件名（形如 game-YYYYMMDD-HHMMSS.json），`n` 是台账序号。
     名字严格校验 + 只允许读 <save_dir>/<局名>/audio/<数字>.mp3 —— 防目录穿越。
 
     ⚠️ `n` 是负数、或超出这一局的台账条数（序列号从 0 数起）时回 **400**：

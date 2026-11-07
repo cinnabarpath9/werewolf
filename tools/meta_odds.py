@@ -115,6 +115,18 @@ def exact() -> dict[str, float]:
         sum(1 for o in three_good if any(o[i] == "神" for i in circle[0])) / len(three_good)
         if three_good else 0.0)
 
+    # 相邻一对 / 三连狼 / “三牌必开一狼”的完整口径
+    for c in ("神", "民", "狼"):
+        res[f"指定一对{c}"] = sum(1 for o in deals if o[0] == c and o[1] == c) / T
+        res[f"全场至少一对{c}"] = sum(
+            1 for o in deals if any(o[i] == c and o[(i + 1) % N] == c for i in range(N))) / T
+    res["指定3连狼"] = sum(1 for o in deals if all(o[i] == "狼" for i in circle[0])) / T
+    res["指定3连至少一狼"] = sum(
+        1 for o in deals if any(o[i] == "狼" for i in circle[0])) / T
+    res["全场至少一处3连狼(成圈)"] = sum(1 for o in deals if has_run(o, "狼", circle)) / T
+    res["全场每个3连都有狼"] = sum(
+        1 for o in deals if all(any(o[i] == "狼" for i in w) for w in circle)) / T
+
     # 全场「至少一处三连」——**这是这一轮修的两个数**：成圈 11 个窗口 / 不接 9 个窗口
     res["全场至少一处3连神(成圈)"] = sum(1 for o in deals if has_run(o, "神", circle)) / T
     res["全场至少一处3连好(成圈)"] = sum(1 for o in deals if has_run(o, "好", circle)) / T
@@ -125,32 +137,48 @@ def exact() -> dict[str, float]:
 
 # ── ② 真发牌抽样（走引擎同一条路径：`random.Random(seed).shuffle(牌堆)`）──────────
 def sample(count: int, seed: int = 20261011) -> dict[str, float]:
-    from wolf.roles import make_board                          # noqa: PLC0415
+    from wolf.roles import ROLES, make_board              # noqa: PLC0415
 
-    deck = list(make_board("eleven_wolfking").roles)
-    kinds = {"wolf": "狼", "wolf_king": "狼", "seer": "神", "witch": "神",
-             "dreamer": "神", "idiot": "神", "gravekeeper": "民", "crow": "民",
-             "lucky": "民"}
+    deck = list(make_board("eleven_knight").roles)
+    kinds = {r: ("狼" if ROLES[r].camp == "wolf" else
+                 "神" if ROLES[r].kind == "god" else "民") for r in set(deck)}
     rng = random.Random(seed)
     circle = windows()
-    n_god = n_good = n_three_good_god = n_three_good = 0
-    for i in range(count):
+    n = {k: 0 for k in (
+        "指定一对神", "指定一对民", "指定一对狼",
+        "全场至少一对神", "全场至少一对民", "全场至少一对狼",
+        "指定3连狼", "指定3连至少一狼", "全场至少一处3连狼(成圈)",
+        "全场每个3连都有狼", "全场至少一处3连神(成圈)", "全场至少一处3连好(成圈)",
+    )}
+    n_three_good = n_three_good_god = 0
+    for _ in range(count):
         rng.shuffle(deck)
         o = tuple(kinds[r] for r in deck)
+        for c in ("神", "民", "狼"):
+            if o[0] == c and o[1] == c:
+                n[f"指定一对{c}"] += 1
+            if any(o[i] == c and o[(i + 1) % N] == c for i in range(N)):
+                n[f"全场至少一对{c}"] += 1
+        if all(o[i] == "狼" for i in circle[0]):
+            n["指定3连狼"] += 1
+        if any(o[i] == "狼" for i in circle[0]):
+            n["指定3连至少一狼"] += 1
+        if has_run(o, "狼", circle):
+            n["全场至少一处3连狼(成圈)"] += 1
+        if all(any(o[i] == "狼" for i in w) for w in circle):
+            n["全场每个3连都有狼"] += 1
         if has_run(o, "神", circle):
-            n_god += 1
+            n["全场至少一处3连神(成圈)"] += 1
         if has_run(o, "好", circle):
-            n_good += 1
-        if all(o[j] != "狼" for j in circle[0]):
+            n["全场至少一处3连好(成圈)"] += 1
+        if all(o[i] != "狼" for i in circle[0]):
             n_three_good += 1
-            if any(o[j] == "神" for j in circle[0]):
+            if any(o[i] == "神" for i in circle[0]):
                 n_three_good_god += 1
-    return {
-        "全场至少一处3连神(成圈)": n_god / count,
-        "全场至少一处3连好(成圈)": n_good / count,
-        "指定3连好里至少一人是神": (n_three_good_god / n_three_good) if n_three_good else 0.0,
-    }
-
+    out = {k: v / count for k, v in n.items()}
+    out["指定3连好"] = n_three_good / count
+    out["指定3连好里至少一人是神"] = (n_three_good_god / n_three_good) if n_three_good else 0.0
+    return out
 
 def check_book(rows: dict[str, float]) -> list[str]:
     """校验《概念库》里的字面数字跟枚举结果一致（给回归用）。"""
@@ -167,6 +195,9 @@ def check_book(rows: dict[str, float]) -> list[str]:
         "21.2%": rows["指定3连好"], "10.6%": rows["指定4连好"],
         "23.3%": rows["全场至少一处3连神(成圈)"], "96.7%": rows["全场至少一处3连好(成圈)"],
         "97.1%": rows["指定3连好里至少一人是神"],
+        "10.9%": rows["指定一对神"], "5.5%": rows["指定一对民"],
+        "83.3%": rows["全场至少一对神"], "53.3%": rows["全场至少一对民"],
+        "78.8%": rows["指定3连至少一狼"], "3.3%": rows["全场每个3连都有狼"],
     }
     bad: list[str] = []
     for lit, val in want.items():
