@@ -115,6 +115,8 @@ class MockAgent(BaseAgent):
             return {"save": wants_save, "poison": None, "reason": "毒药先留着"}
         if kind == "hunter_shoot":
             return {"shoot": None, "reason": "不确认，先不开枪"}
+        if kind == "lucky_shoot":
+            return {"shoot": None, "reason": "不确认，先不开枪"}
         if kind == "wolf_king_take":
             # 狼王出局时"带走谁"（新板子 `eleven_wolfking`）。mock 走**随机带走一个好人**：
             # 这条链路（带人 → 判屠边）必须真的被跑到，否则 mock/回归局里狼王等于白板。
@@ -439,9 +441,12 @@ class HumanAgent(BaseAgent):
             use = await self._input("幸运儿：今晚要用掉这一次性技能吗？(y/N)：")
             if not truthy(use, default=False):
                 return {"use": False, "reason": "人类玩家留着不用"}
-            skill = await self._input("用哪个？填 1=查验 2=毒 3=守护：")
-            table = {"1": "check", "2": "poison", "3": "guard"}
+            skill = await self._input("用哪个？填 1=查验 2=守护 3=子弹：")
+            table = {"1": "check", "2": "guard", "3": "bullet"}
             sk = table.get(skill.strip(), "check")
+            if sk == "bullet":
+                return {"use": True, "skill": "bullet", "target": None,
+                        "reason": "人类玩家选择子弹"}
             tgt = await self._input(f"目标是谁？{hint}：")
             # ⚠️ 兜底原来写成 `self.legal[0]` —— HumanAgent 没有 `legal` 属性（只有 task 传进来的
             #    局部 `legal`），真人目标输入非数字时会 AttributeError。这里用本任务的合法名单。
@@ -532,6 +537,7 @@ class HumanAgent(BaseAgent):
 
         field = {"wolf_kill": "target", "seer_check": "target",
                  "vote": "vote", "hunter_shoot": "shoot",
+                 "lucky_shoot": "shoot",
                  # 狼王出局时"带走谁"（新板子 `eleven_wolfking`）：跟猎人开枪同一套选号面板
                  "wolf_king_take": "take",
                  "sheriff_vote": "vote", "badge": "to"}.get(kind, "target")

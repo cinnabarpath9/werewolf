@@ -66,6 +66,7 @@ CAUSE_TEXT = {
     "poison": "夜里被女巫毒死",
     "vote": "白天被投票放逐",
     "hunter": "被猎人开枪带走",
+    "lucky": "被幸运儿开枪带走",
     # 2026-10-10 补：下面两条以前没登记，私密经历里会写成英文 key（`dream` / `explode`）
     "dream": "夜里被摄梦人连摄两晚而死",
     "explode": "自爆出局",
@@ -308,6 +309,8 @@ class Seat:
     #:    **可以连着两天甚至更多天咒同一个人** —— 它本质是「两票的民牌」）。
     #:    留着是为了复盘/自查能看出"他这几天一直压着谁"，别再拿它去加限制。
     lucky_used: bool = False                                # 幸运儿：一次性技能是否已用掉
+    #: 幸运儿选了「子弹」：还没打出去时是 True；出局时按死因决定能否开枪（毒/梦死不能）。
+    lucky_bullet: bool = False
     revealed_idiot: bool = False                            # 白痴：已经翻牌了（活着但不能再投票）
     #: 狼王（新板子 `eleven_wolfking`）：他临死那一口**只能带走一次**。
     #: 为什么要有这个标记：他能被四种路径弄死（夜里死 / 被放逐 / 被枪带走 / 自爆），
@@ -1316,25 +1319,26 @@ class Game:
                                     f"你摄梦了 {dreamer_target}号。",
                                     seat=dreamer.id, visible_to=(f"seat:{dreamer.id}",))
 
-        # --- 幸运儿（一次性：三选一 —— 查验 / 毒 / 守护；用完就永远没有）---
-        lucky_poison: int | None = None
+        # --- 幸运儿（一次性：三选一 —— 查验 / 守护 / 子弹；用完就永远没有）---
         lucky_guard: int | None = None
         lucky = next((s for s in self.alive if s.role_key == "lucky"), None)
         # ⚠️ 用户 2026-10-09 改定：**第 1 夜不问幸运儿**（第 1 夜三个技能都没必要开：
-        #    守护可能奶穿、毒可能掉轮次、查验可能和预言家重复），**第 2 夜起**每个夜晚
+        #    守护可能奶穿、子弹/查验也没必要），**第 2 夜起**每个夜晚
         #    给他一次决策轮；技能用掉之后夜间不再问（一次性的）。
         if lucky and not lucky.lucky_used and day >= 2:
             legal = [i for i in self.alive_ids()]
             task = Task(kind="lucky",
                         text=(f"第 {day} 夜，你使用**幸运儿**的一次性技能（**只有这一次**，用完永远没有）：\n"
                               f"三选一 —— ① `check` 查验一个人是好人还是狼人；"
-                              f"② `poison` 毒死一个人；③ `guard` 让一个人今夜免于狼刀"
-                              f"（守护与摄梦撞在同一个人身上会**奶穿**）。\n"
+                              f"② `guard` 让一个人今夜免于狼刀（守护与摄梦撞在同一个人身上会**奶穿**）；"
+                              f"③ `bullet` 选择**子弹**：你没有主动毒杀能力，但出局时（被放逐或被狼刀）"
+                              f"可以开枪带走一个人自证；**被毒死/被梦死不能开枪**。\n"
+                              f"选 `bullet` 时 `target` 留空；选 `check`/`guard` 必须给一个活人。\n"
                               f"也可以选择**今晚不用**（`use: false`），留到后面的夜晚。"
                               f"⚠️ 你看不到女巫/守卫这些技能的其它使用情况。"),
                         schema=('{"reads": [{"seat": <编号>, "camp": "wolf|good", "why": "<一句>"}], '
                                 '"summary": "<一句判断>", "use": true/false, '
-                                '"skill": "check|poison|guard", "target": <玩家编号>, '
+                                '"skill": "check|guard|bullet", "target": <玩家编号或 null>, '
                                 '"reason": "<一句话>"}'),
                         legal=legal, required=())
             reply = await self.act(lucky, task)
@@ -1348,12 +1352,13 @@ class Game:
                 #    coerce_seat 会随机挑一个活人 —— 一次性的毒可能就这样毒死好人，
                 #    与守卫（"不随机，按没守成处理"）和女巫的纪律相反。
                 tgt = self.coerce_seat(reply.get("target"), legal, default=None)
-                if skill not in ("check", "poison", "guard") or tgt is None:
+                if skill not in ("check", "guard", "bullet") or (skill != "bullet" and tgt is None):
                     # 技能名不认识 / 目标不可用：**不消耗**这次机会，并如实告诉他
                     lucky.private_events.append(
                         f"（系统提示）你的 skill 写成了 {reply.get('skill')!r}、"
                         f"target 写成了 {reply.get('target')!r} —— 这一手按「没有使用」处理，"
-                        f"这次**没有消耗**你的幸运。请写 check/poison/guard 并给一个活着的人。")
+                        f"这次**没有消耗**你的幸运。请写 check/guard/bullet；"
+                        f"check/guard 要给一个活着的人，bullet 不用给目标。")
                 else:
                     lucky.lucky_used = True
                     if skill == "check":
@@ -1365,14 +1370,16 @@ class Game:
                         self.ledger.add(day, "night", "private",
                                         f"你查验了 {tgt}号，结果是【{verdict}】。（幸运技能已用完）",
                                         seat=lucky.id, visible_to=(f"seat:{lucky.id}",))
-                    elif skill == "poison":
-                        lucky_poison = tgt
-                        lucky.private_events.append(
-                            f"第 {day} 夜：你用幸运技能毒了 {tgt}号（技能已用完）。")
-                    else:
+                    elif skill == "guard":
                         lucky_guard = tgt
                         lucky.private_events.append(
                             f"第 {day} 夜：你用幸运技能守护了 {tgt}号（技能已用完）。")
+                    else:
+                        lucky.lucky_bullet = True
+                        lucky.private_events.append(
+                            f"第 {day} 夜：你选择了**子弹**（技能已用完）。你出局时若死因是"
+                            f"「被放逐」或「被狼刀」，可以开枪带走一个人自证；"
+                            f"被毒死/被梦死不能开枪。")
             else:
                 lucky.private_events.append(f"第 {day} 夜：你今晚没有使用幸运技能（留着）。")
 
@@ -1471,11 +1478,9 @@ class Game:
                 pass                              # 被保护住 / 被女巫救下
             else:
                 deaths[victim] = "wolf"
-        # 毒：女巫的毒与幸运儿的毒同一套规则 —— **梦游者免疫夜间伤害**，毒不动他
-        for _poison in (poison, lucky_poison):
-            if _poison is None or _poison == dreamer_target:
-                continue
-            deaths[_poison] = "poison"
+        # 毒：**梦游者免疫夜间伤害**，毒不动他（幸运儿已不再有毒药）。
+        if poison is not None and poison != dreamer_target:
+            deaths[poison] = "poison"
         # 连续两晚被摄 → 第二晚死（含摄梦人自我连摄）
         if dream_twice:
             deaths.setdefault(dreamer_target, "dream")
@@ -2184,6 +2189,8 @@ class Game:
             dead = self.seat_by_id(seat_id)
             if dead.role_key == "hunter" and cause == "wolf":
                 await self.hunter_shoot(dead, daytime=False)
+            elif dead.role_key == "lucky" and cause == "wolf" and dead.lucky_bullet:
+                await self.lucky_shoot(dead, daytime=False)
             elif dead.role_key == "wolf_king":
                 await self.wolf_king_take(dead, where=f"你夜里出局了（{CAUSE_TEXT.get(cause, cause)}）",
                                           daytime=False)
@@ -2594,6 +2601,8 @@ class Game:
         #    正是新板子最要紧的一步棋。
         if seat.role_key == "hunter":
             await self.hunter_shoot(seat, daytime=True)
+        elif seat.role_key == "lucky" and seat.lucky_bullet:
+            await self.lucky_shoot(seat, daytime=True)
         elif seat.role_key == "wolf_king":
             await self.wolf_king_take(seat, where="你被投票放逐了", daytime=True)
         self.check_win()
@@ -2644,6 +2653,55 @@ class Game:
             # 第 2 夜起就没有了 —— 那时连猎人自己都没有遗言。
             await self.last_words(self.seat_by_id(target))
         await self.handle_sheriff_death(self.seat_by_id(target))
+        self.check_win()
+
+    async def lucky_shoot(self, lucky: Seat, daytime: bool = True) -> None:
+        """幸运儿选中「子弹」后，出局时按死因决定能否开枪。
+
+        与猎人同口径：只在**被放逐**或**被狼刀**时触发；被毒死 / 被梦死 /
+        被狼王带走 / 被枪带走都不能开枪。子弹只有一次，开了就消耗。
+        """
+        if lucky is None or not lucky.lucky_bullet:
+            return
+        lucky.lucky_bullet = False                  # 先落闸：多条死亡路径不许重复触发
+        legal = list(self.alive_ids())
+        if not legal:
+            self.ledger.add(self.day, "day", "announce",
+                            f"{lucky.id}号 亮出【幸运儿】身份，但场上没有可带走的人。")
+            return
+        where = "你被投票放逐了" if daytime else "你被狼刀出局了"
+        task = Task(
+            kind="lucky_shoot",
+            text=(f"{where}。你选的是**子弹**：可以亮出【幸运儿】身份，开枪带走一名玩家自证；"
+                  f"也可以选择不开枪。**被毒死/被梦死不能开枪**，本枪只有一次。"),
+            schema='{"shoot": <玩家编号或 null>, "reason": "<一句话理由>"}',
+            legal=legal,
+        )
+        reply = await self.act(lucky, task)
+        target = self.coerce_seat(reply.get("shoot"), legal, default=None)
+        if not target:
+            self.ledger.add(self.day, "day", "announce",
+                            f"{lucky.id}号 亮出【幸运儿】身份，但没有开枪。")
+            return
+        if daytime:
+            self.ledger.add(self.day, "day", "announce",
+                            f"{lucky.id}号 亮出【幸运儿】身份，开枪带走 {target}号 —— "
+                            f"{target}号 的死因公示：被子弹打死。")
+        else:
+            self.ledger.add(self.day, "day", "announce",
+                            f"{lucky.id}号 亮出【幸运儿】身份，开枪带走 {target}号"
+                            f"（夜里出局，不公示死因）。")
+        self.kill(target, "lucky")
+        victim_seat = self.seat_by_id(target)
+        if victim_seat.role_key == "wolf_king":
+            await self.wolf_king_take(victim_seat, where="你被幸运儿开枪带走",
+                                      daytime=daytime)
+        if self.check_win():
+            return
+        if daytime:
+            # 子弹最早第 2 夜才会被选中；夜里那一枪按“夜里出局无遗言”处理。
+            await self.last_words(victim_seat)
+        await self.handle_sheriff_death(victim_seat)
         self.check_win()
 
     # ------------------------------------------------------------------ #
@@ -3529,7 +3587,7 @@ class Game:
                     return True
             elif s.role_key in ("hunter", "dreamer"):
                 return True
-            if s.role_key == "lucky" and not s.lucky_used:
+            if s.role_key == "lucky" and (s.lucky_bullet or not s.lucky_used):
                 return True
         return False
 
@@ -3753,6 +3811,8 @@ class Game:
                     "death_day": s.death_day, "death_cause": s.death_cause,
                     "last_guard": s.last_guard,
                     "revealed_idiot": s.revealed_idiot,
+                    "lucky_used": s.lucky_used,
+                    "lucky_bullet": s.lucky_bullet,
                     # 狼王是否已经用过"带走一人"（复盘要看得出他那一口到底用没用）
                     "king_done": s.king_done,
                 }

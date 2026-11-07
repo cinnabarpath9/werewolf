@@ -2081,8 +2081,9 @@ function renderSettings() {
         ? `<span class="badge ok">Key 已填${a.key_tail ? ' · ' + escapeHtml(a.key_tail) : ''}</span>`
         : '<span class="badge no">缺 Key</span>';
       const src = a.source === 'env' ? '<span class="badge env">.env</span>' : '';
-      const del = a.source === 'env' ? ''
-        : `<button class="ghost" type="button" data-del="${id}">删除</button>`;
+      // `.env` 来源也允许删：服务端会一起删掉 .env 里的 BASE_URL/KEY/MODEL，
+      // 否则页面上删了、下次重启又冒出来。
+      const del = `<button class="ghost danger" type="button" data-del="${id}">删除</button>`;
       return `<div class="api-row">
         <div class="api-id">${escapeHtml((a.id || '?').slice(0, 2))}</div>
         <div class="api-main">
@@ -2346,10 +2347,15 @@ function applySettingsPayload(data) {
 }
 
 async function deleteApi(id) {
+  const api = (SETTINGS.apis || []).find(x => x.id === id);
   const btn = document.querySelector(`#apiList [data-del="${id}"]`);
   if (btn && btn.dataset.armed !== '1') {
     btn.dataset.armed = '1';
     btn.textContent = '再点一次';
+    // `.env` 里若有同名档案，后端会一起删；本地来源也要提前说清，不能只说“确认删除”。
+    toast(api && api.source === 'env'
+      ? '再点一次：会同时删掉 .env 里的地址 / 模型 / key'
+      : '再点一次确认；若 .env 有同名档案也会一起删');
     setTimeout(() => {
       if (btn.isConnected) { btn.dataset.armed = ''; btn.textContent = '删除'; }
     }, 3500);
@@ -2365,7 +2371,7 @@ async function deleteApi(id) {
     if (!res.ok || !data.ok) { toast(data.error || '删除失败', true); return; }
     if (editingApi === id) resetApiForm();
     applySettingsPayload(data);
-    toast(`已删除 ${id}`);
+    toast(data.warning ? data.warning : `已删除 ${id}`);
   } catch (err) {
     toast('删除失败：' + ((err && err.message) || err), true);
   }
@@ -4929,7 +4935,7 @@ function renderAsk(f, ask) {
   const labelMap = {
     speech: '轮到你发言', vote: '轮到你投票', wolf_kill: '狼队行动：今晚杀谁',
     wolf_talk: '狼队讨论：说说你今晚想杀谁', seer_check: '预言家查验',
-    witch: '女巫用药', hunter_shoot: '猎人开枪', guard: '守卫行动：今晚守谁',
+    witch: '女巫用药', hunter_shoot: '猎人开枪', lucky_shoot: '幸运儿开枪', guard: '守卫行动：今晚守谁',
     dream: '摄梦人行动：今晚摄谁（可以空过）',
     lucky: '幸运儿：用掉这一次性技能吗',
     /* 狼王（新板子 eleven_wolfking）：出局时当场带走一名好人（名单里没有狼队友） */
@@ -5260,8 +5266,8 @@ function renderAsk(f, ask) {
   if (ask.kind === 'lucky') {
     const hint = document.createElement('div');
     hint.className = 'hint';
-    hint.textContent = '三选一，用完就永远没有：① 查验（看阵营）② 毒（杀一个人）'
-      + '③ 守护（今夜挡狼刀；不能连续两晚守同一人）。也可以留到以后再用。';
+    hint.textContent = '三选一，用完就永远没有：① 查验（看阵营）② 守护（今夜挡狼刀）'
+      + '③ 子弹（不主动杀人；被放逐/被狼刀出局时可开枪带走一人自证，被毒/被梦死不能开）。也可以留到以后再用。';
     f.appendChild(hint);
 
     let skill = null;
@@ -5272,14 +5278,17 @@ function renderAsk(f, ask) {
     seatRow.className = 'seatpick';
     seatRow.style.display = 'none';
 
-    const skillDefs = [['check', '① 查验'], ['poison', '② 毒'], ['guard', '③ 守护']];
+    const skillDefs = [['check', '① 查验'], ['guard', '② 守护'], ['bullet', '③ 子弹']];
     skillDefs.forEach(([key, text]) => {
       const b = mkBtn(text, () => {
         skill = key;
         [...skillRow.children].forEach(x => x.classList.remove('on'));
         b.classList.add('on');
-        seatRow.style.display = 'flex';       // 选完技能才让人选人
-        toast('选一个 ' + text.slice(2) + ' 的目标，再点确认');
+        // 子弹是“出局时才开”的被动技能，这一手不需要目标。
+        seatRow.style.display = key === 'bullet' ? 'none' : 'flex';
+        toast(key === 'bullet'
+          ? '选子弹不用挑目标，点确认就行；出局时再选人'
+          : '选一个 ' + text.slice(2) + ' 的目标，再点确认');
       });
       skillRow.appendChild(b);
     });
@@ -5297,8 +5306,9 @@ function renderAsk(f, ask) {
 
     const confirm = mkBtn('确认用掉这次机会', () => {
       if (!skill) { toast('先选一个技能'); return; }
-      if (picked === null) { toast('再选一个目标'); return; }
-      answer({ use: true, skill, target: picked, reason: '人类玩家自己决定的' });
+      if (skill !== 'bullet' && picked === null) { toast('再选一个目标'); return; }
+      answer({ use: true, skill, target: skill === 'bullet' ? null : picked,
+               reason: '人类玩家自己决定的' });
       S.ask = null; renderFooter();
     }, 'primary');
     const later = mkBtn('留到以后（今晚不用）', () => {
@@ -5367,7 +5377,7 @@ function renderAsk(f, ask) {
   legal.forEach(id => {
     row.appendChild(mkBtn(id + '号', () => pickSeat(id)));
   });
-  if (ask.kind === 'hunter_shoot') {
+  if (ask.kind === 'hunter_shoot' || ask.kind === 'lucky_shoot') {
     row.appendChild(mkBtn('不开枪', () => pickSeat(0)));
   }
   if (ask.kind === 'wolf_king_take') {
@@ -5391,7 +5401,7 @@ function renderAsk(f, ask) {
     });
     b.style.flex = '0 0 96px';
     row.appendChild(b);
-  } else {
+  } else if (ask.kind !== 'hunter_shoot' && ask.kind !== 'lucky_shoot') {
     // 非投票的选号面板也允许"这一手放弃"：否则手机端只能干等 human_timeout 超时
     // （引擎和桌面端本来就支持 abstain，只有手机端没入口）
     // 空过在这个板子上是**正经的一手**（摄梦人可以今晚不摄、养鸦人可以今晚不咒人、
@@ -5430,7 +5440,7 @@ function renderAsk(f, ask) {
     const fieldMap = { vote: 'vote', sheriff_vote: 'vote', wolf_kill: 'target',
                        seer_check: 'target', guard: 'target', dream: 'target',
                        curse: 'target', lucky: 'target',
-                       hunter_shoot: 'shoot',
+                       hunter_shoot: 'shoot', lucky_shoot: 'shoot',
                        /* 狼王带走谁：字段名是 take（引擎认 take/shoot/target 三种写法） */
                        wolf_king_take: 'take',
                        badge: 'to' };

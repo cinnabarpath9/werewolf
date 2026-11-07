@@ -67,6 +67,12 @@ def load_playbook(project_root: str, path: str = "", role_key: str = "",
 _PART_MARK = re.compile(r"\s*<!--\s*frag:part:(open|mid|late)\s*-->\s*$")
 _PART_END = re.compile(r"\s*<!--\s*frag:endpart\s*-->\s*$")
 
+#: **事件触发块**：`<!-- frag:when:<name> -->` … `<!-- frag:endwhen -->`。
+#: 只在当前局面真的命中该事件时才进包；`triggers=None`（页面预览 / 老调用方）
+#: 时整块保留，避免编辑器预览里看不到内容。
+_WHEN_MARK = re.compile(r"\s*<!--\s*frag:when:([a-z_]+)\s*-->\s*$")
+_WHEN_END = re.compile(r"\s*<!--\s*frag:endwhen\s*-->\s*$")
+
 #: 阶段顺序（`late` 也拿 mid 的内容：残局仍然需要"怎么穿身份/倒钩/煽动"，
 #: 只是不需要"第一天怎么上警" —— 所以过滤规则是"**去掉比当前阶段更早/更晚的专门节**"）
 PHASE_ORDER = {"open": 0, "mid": 1, "late": 2}
@@ -108,6 +114,66 @@ def phase_of(state) -> str:
     return "mid"
 
 
+#: 夜间动作任务：只发“夜里怎么动”的段落。
+NIGHT_TASKS = frozenset(("witch", "dream", "guard", "lucky", "seer_check",
+                         "wolf_intent", "wolf_talk", "wolf_kill"))
+#: 白天说话/投票任务：只发“白天怎么打”的段落。
+DAY_TASKS = frozenset(("speech", "pk_speech", "sheriff_speech", "last_words",
+                       "vote", "sheriff_vote", "sheriff_run", "claim", "badge",
+                       "wolf_explode"))
+#: 竞选相关任务：才发“上警报不报身份 / 上警代价”。
+SHERIFF_TASKS = frozenset(("sheriff_run", "sheriff_speech", "sheriff_vote", "badge"))
+#: 出局时的技能任务：猎枪、幸运儿子弹、狼王带人。
+DEATH_TASKS = frozenset(("hunter_shoot", "lucky_shoot", "wolf_king_take"))
+
+
+def task_triggers_for(task=None) -> set[str]:
+    """只算**任务**触发的块（不含台账事件）。
+
+    这些块全部在 `context.build` 的**包尾补章**里发；主角色书不带任务块，
+    这样同一个座位在夜里/白天之间切换时，前面的稳定前缀不会因为任务变化而断缓存。
+    """
+    kind = str(getattr(task, "kind", "") or "")
+    out: set[str] = set()
+    if kind in NIGHT_TASKS:
+        out.add("night_action")
+    if kind in DAY_TASKS:
+        out.add("day_speech")
+    if kind in SHERIFF_TASKS:
+        out.add("sheriff_election")
+    if kind in DEATH_TASKS:
+        out.add("death_action")
+    return out
+
+
+def triggers_for(state, seat, task=None) -> set[str]:
+    """按**当前局面 + 当前任务**算命中哪些触发块。
+
+    事件只从「已经发生、当前座位看得到」的台账里判断；不看未来。
+    · `front_seer_claim`：今天前面已经有人公开声称预言家；
+    · `night_action` / `day_speech` / `sheriff_election` / `death_action`：按 task.kind 决定。
+    """
+    out: set[str] = task_triggers_for(task)
+    day = int(getattr(state, "day", 1) or 1)
+    who = getattr(seat, "id", None)
+    # 女巫的“救不救”只在**手里还有解药**时是有效判断题；不能用“第一夜”当条件。
+    if str(getattr(task, "kind", "") or "") == "witch" \
+            and str(getattr(seat, "role_key", "") or "") == "witch" \
+            and bool(getattr(state, "witch_heal", False)):
+        out.add("witch_save")
+    for e in getattr(getattr(state, "ledger", None), "entries", []) or []:
+        if int(getattr(e, "day", 0) or 0) != day:
+            continue
+        if getattr(e, "kind", "") != "claim":
+            continue
+        if getattr(e, "seat", None) == who:
+            continue
+        claim = str((getattr(e, "data", None) or {}).get("claim", "") or "")
+        if "预言家" in claim or "预言家" in str(getattr(e, "text", "") or ""):
+            out.add("front_seer_claim")
+    return out
+
+
 def _filter_part(text: str, phase: str) -> str:
     """只保留"当前阶段该看的"小节。
 
@@ -124,6 +190,9 @@ def _filter_part(text: str, phase: str) -> str:
     keep = True
     skipping = False
     for line in text.splitlines():
+        # ⚠️ 阶段过滤只删正文；但结构标记**不能跟着被删**，否则后面的
+        # `_filter_role` 会丢掉角色状态或条件块的开/关。
+        # part 标记仍要先参与 keep/skipping 计算，再把标记本身留着。
         m = _PART_MARK.match(line)
         if m:
             tag = m.group(1)
@@ -133,22 +202,28 @@ def _filter_part(text: str, phase: str) -> str:
             else:
                 keep = (tag == phase)
             skipping = True
+            out.append(line)
             continue
         if _PART_END.match(line):
             keep = True
             skipping = False
+            out.append(line)
+            continue
+        if re.match(r"\s*<!--\s*frag:", line):
+            out.append(line)
             continue
         if keep or not skipping:
             out.append(line)
     return "\n".join(out)
 
 
-def _filter_role(text: str, role_key: str, camp: str = "", phase: str = "") -> str:
-    """按角色 + 阵营过滤：`<!-- frag:all -->`（人人看）、`<!-- frag:camp:xx -->`（某阵营看）、
-    `<!-- frag:role:xx -->`（某个角色看）、`<!-- frag:god -->`（**神职通用**：女巫/猎人/白痴都看）。
+def _filter_role(text: str, role_key: str, camp: str = "", phase: str = "",
+                 triggers: set[str] | None = None, keep_when: bool = False) -> str:
+    """按角色 + 阵营 + 阶段 + 事件过滤。
 
-    阵营标记同时接受 `frag:camp:wolf` 与**裸写** `frag:wolf`（跟玄学书的写法一致）——
-    两种都认，省得做内容的人记两套规矩。
+    角色/阵营标记：`<!-- frag:all -->`、`frag:camp:xx`、`frag:role:xx`、`frag:god`。
+    事件标记：`<!-- frag:when:name -->` … `<!-- frag:endwhen -->`；`triggers=None`
+    时保留整块（页面预览/老调用方），传空集合时全部收起。
     """
     key = (role_key or "").strip().lower()
     camp_key = (camp or "").strip().lower()
@@ -167,7 +242,24 @@ def _filter_role(text: str, role_key: str, camp: str = "", phase: str = "") -> s
         text = _filter_part(text, phase)
     out: list[str] = []
     keep = True
+    #: 条件块可能嵌套（例如 `day_speech` 里再套 `front_seer_claim`）。
+    #: 必须用栈：只记一个布尔时，内层结束后外层后续正文会漏出来（实测主包重复进一段）。
+    when_stack: list[bool] = []
     for line in text.splitlines():
+        m_when = _WHEN_MARK.match(line)
+        if m_when:
+            when_stack.append(triggers is None or m_when.group(1) in triggers)
+            if keep_when:
+                out.append(line)
+            continue
+        if _WHEN_END.match(line):
+            if when_stack:
+                when_stack.pop()
+            if keep_when:
+                out.append(line)
+            continue
+        if any(not on for on in when_stack):
+            continue
         # ⚠️ `part:*` / `endpart` 也要认：不带 phase 时 `_filter_part` 原样返回，
         #    这些标记行必须在这里被消费掉，否则会漏成可见文字进包（t_playbook 1i 就查这个）。
         marker = re.match(r"\s*<!--\s*frag:(all|god|role:[a-z_]+|camp:(?:wolf|good)|wolf|good|end"
@@ -191,6 +283,36 @@ def _filter_role(text: str, role_key: str, camp: str = "", phase: str = "") -> s
         if keep:
             out.append(line)
     return "\n".join(out)
+
+
+def when_blocks(text: str, role_key: str, camp: str = "", phase: str = "",
+                triggers: set[str] | None = None) -> str:
+    """只取出**命中的 `frag:when` 块**，用于主包之外的“任务补章”。
+
+    为什么单独做：主角色书不再按任务删段（那样会改前缀、断缓存），而是先把
+    **所有** when 块从主包去掉，再把这一次命中的块贴到包尾。正文和原来一样，
+    只是搬了位置；`triggers=None` 按空集处理（不附任何块）。
+    """
+    if not text:
+        return ""
+    wanted = set() if triggers is None else set(triggers)
+    body = _filter_role(text, role_key, camp, phase, triggers=None, keep_when=True)
+    out: list[str] = []
+    #: 栈里每个条件块的 `(名字, 本块自己是否命中)`。嵌套块的正文要求**每一层都命中**：
+    #: 只命中内层 `front_seer_claim` 而外层 `day_speech` 没命中时，内层不能单独漏出来。
+    stack: list[tuple[str, bool]] = []
+    for line in body.splitlines():
+        m = _WHEN_MARK.match(line)
+        if m:
+            stack.append((m.group(1), m.group(1) in wanted))
+            continue
+        if _WHEN_END.match(line):
+            if stack:
+                stack.pop()
+            continue
+        if stack and all(on for _, on in stack):
+            out.append(line)
+    return _clean("\n".join(out)).strip()
 
 
 def playbook_block(text: str, title: str = "") -> str:
@@ -290,10 +412,10 @@ def filter_camp(text: str, camp: str) -> str:
     return _filter_camp(text, camp)
 
 
-def filter_role(text: str, role_key: str, camp: str = "", phase: str = "") -> str:
-    """公开别名：给 context.build 用（按角色 + 阵营过滤 `<!-- frag:role:xx -->` /
-    `<!-- frag:camp:xx -->` 段落）。"""
-    return _filter_role(text, role_key, camp, phase)
+def filter_role(text: str, role_key: str, camp: str = "", phase: str = "",
+                triggers: set[str] | None = None) -> str:
+    """公开别名：给 context.build 用（按角色 + 阵营 + 阶段 + 事件过滤）。"""
+    return _filter_role(text, role_key, camp, phase, triggers)
 
 
 def filter_role_only(text: str, role_key: str, phase: str = "") -> str:

@@ -265,7 +265,7 @@ const LABEL = {
   speech: '轮到你发言', sheriff_speech: '轮到你竞选发言', vote: '轮到你投票',
   wolf_kill: '狼队：今晚杀谁', wolf_talk: '狼队讨论', seer_check: '预言家查验',
   witch: '女巫用药', guard: '守卫行动', dream: '摄梦人行动', lucky: '幸运儿技能',
-  hunter_shoot: '猎人开枪', wolf_king_take: '狼王带走一人', last_words: '你的遗言',
+  hunter_shoot: '猎人开枪', lucky_shoot: '幸运儿开枪', wolf_king_take: '狼王带走一人', last_words: '你的遗言',
   badge: '警徽怎么处理', sheriff_run: '要不要竞选警长', sheriff_order: '警长定发言方向',
   wolf_explode: '要不要自爆', sheriff_vote: '投警长',
 };
@@ -313,6 +313,42 @@ function renderAsk(ask) {
   if (ask.kind === 'vote' || ask.kind === 'sheriff_vote') {
     for (const n of legal) row.appendChild(btn(n + '号', { vote: n }));
     row.appendChild(btn('弃权', { abstain: true, reason: '弃权' }));
+    body.appendChild(row);
+    return;
+  }
+
+  // 幸运儿：一次性三选一；子弹不需要目标，选了就提交。
+  if (ask.kind === 'lucky') {
+    const pickSkill = (skill) => {
+      if (skill === 'bullet') {
+        send({ use: true, skill: 'bullet', target: null, reason: '选了子弹' });
+        return;
+      }
+      body.innerHTML = '';
+      const r = document.createElement('div'); r.className = 'row';
+      for (const n of legal) {
+        r.appendChild(btn('选 ' + n + '号', () => send({
+          use: true, skill, target: n, reason: '人类玩家自己决定的',
+        })));
+      }
+      body.appendChild(r);
+    };
+    const r = document.createElement('div'); r.className = 'row';
+    r.appendChild(btn('① 查验', () => pickSkill('check')));
+    r.appendChild(btn('② 守护', () => pickSkill('guard')));
+    r.appendChild(btn('③ 子弹（出局时开枪）', () => pickSkill('bullet')));
+    body.appendChild(r);
+    body.appendChild(btn('留到以后（今晚不用）',
+      { use: false, reason: '人类玩家留着不用' }));
+    return;
+  }
+
+  // 猎人 / 幸运儿子弹：选目标或不开枪
+  if (ask.kind === 'hunter_shoot' || ask.kind === 'lucky_shoot') {
+    for (const n of legal) {
+      row.appendChild(btn(n + '号', { shoot: n, reason: '人类玩家自己决定的' }));
+    }
+    row.appendChild(btn('不开枪', { shoot: null, reason: '人类玩家选择不开枪' }));
     body.appendChild(row);
     return;
   }

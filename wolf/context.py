@@ -50,10 +50,13 @@ def build(state, seat, task: Task) -> str:
     # 当前**局面阶段**（首夜/第一天 → open；前两轮 → mid；残局 → late）。
     # 只发这一阶段该看的小节，别把"残局怎么打"塞给第一天的模型（用户 2026-10-09 定的成本纪律）。
     phase = tabletalk.phase_of(state)
+    triggers = tabletalk.triggers_for(state, seat, task)
+    camp = "wolf" if getattr(seat, "camp", "") == "wolf" else "good"
     if book:
-        camp = "wolf" if getattr(seat, "camp", "") == "wolf" else "good"
+        # 主角色书**不带任务块**：任务块全部由下面的包尾补章发。
+        # 这样夜里→白天、发言→投票切换时，前面这一大段稳定前缀不因任务而变。
         block = tabletalk.playbook_block(
-            tabletalk.filter_role(book, seat.role_key, camp, phase))
+            tabletalk.filter_role(book, seat.role_key, camp, phase, set()))
         if block:
             parts.append(block)
 
@@ -114,6 +117,22 @@ def build(state, seat, task: Task) -> str:
             "【你的警徽】你现在是本局警长：投票时你的一票算 1.5 票；"
             "你出局（被放逐 / 被刀 / 被枪）时，可以选择把警徽传给一名存活玩家，或者撕掉它。"
         )
+
+    # 身份锚点：长包里同时有狼队/好人两边的通用战术，模型偶尔会把“对手视角”当成自己
+    # （真局：9 号是愚者，却整段自称“我是一头狼”，还抱怨没有队友名单）。
+    # 放在动态段（当前阶段/台账）之前：它属于稳定前缀，跨天不破缓存；
+    # 同时仍在当前任务之前再报一次身份，并明确有没有狼队友，压住角色漂移。
+    if role.camp == "wolf":
+        mates = [f"{s.id}号" if s.alive else f"{s.id}号（已出局）"
+                 for s in state.seats if s.camp == "wolf" and s.id != seat.id]
+        tail = (f"【身份提醒】你是 {seat.id}号【{role.name}】（狼人阵营）。"
+                f"你的狼队友：{'、'.join(mates) if mates else '无'}。"
+                "你是狼，才可以用“我队友/我们狼队”这种说法；上面好人阵营的内容是对手视角，别代入。")
+    else:
+        tail = (f"【身份提醒】你是 {seat.id}号【{role.name}】（好人阵营）。"
+                "你**没有狼队友**；上面所有“狼队/悍跳狼”的内容都是**对手视角**，"
+                "是给你判断用的，不是你的身份。不要自称“我是一头狼”“我队友”。")
+    parts.append(tail)
 
     alive = state.alive_ids()
     dead = state.dead_list()
@@ -179,6 +198,14 @@ def build(state, seat, task: Task) -> str:
     if seat.mind:
         parts.append("【你的推理笔记（只有你自己看得到，不会公开）】\n" + seat.mind)
 
+    # 任务段统一放在这里（身份锚点之后、当前任务之前）：主角色书不再因为任务切换
+    # 删段，前缀稳定；补章本身跟当前任务走，大小和原来“主包里那段”基本相同。
+    # event（如 front_seer_claim）也一起搬过来：它本来也是条件块，rarely 才命中。
+    if book:
+        task_tail = tabletalk.when_blocks(book, seat.role_key, camp, phase, triggers)
+        if task_tail:
+            parts.append("【当前任务补充（按任务触发）】\n" + task_tail)
+
     parts.append("【当前任务】" + task.text)
     if task.legal:
         parts.append("【可选目标】" + seats_text(task.legal))
@@ -227,6 +254,25 @@ def build(state, seat, task: Task) -> str:
                     raw=_raw_claim_of(state, seat.id) if not _claim_of(state, seat.id) else ""))
             if extra:
                 parts.append(extra)
+
+    # ── 幸运儿的技能参考章（2026-11-07，纯附加块）─────────────────────────
+    # 幸运儿选“守护”时要会守人；选“子弹”时要会开枪。把守卫/猎人的角色章
+    # 附在这**一次**决策的末尾，不塞进主包，避免平时每次调用都多背两份。
+    # 放在包尾也保住前缀缓存：前面的玩法书/规则/台账完全不变。
+    if role.camp == "good" and seat.role_key == "lucky" and book:
+        if task.kind == "lucky":
+            guard_text = tabletalk.filter_role_only(book, "guard", phase)
+            if guard_text:
+                parts.append("【幸运儿·选「守护」时的参考章】\n"
+                             "你选了守护，就按守卫这一章的“守谁/守夜博弈”来；只是你只能做一次。\n"
+                             + guard_text)
+        if task.kind in ("lucky", "lucky_shoot"):
+            hunter_text = tabletalk.filter_role_only(book, "hunter", phase)
+            if hunter_text:
+                parts.append("【幸运儿·选「子弹」/开枪时的参考章】\n"
+                             "你的子弹和猎人的枪同一套口径：被放逐或被狼刀可以开枪；"
+                             "被毒死/被梦死不能开枪；开了就消耗。\n"
+                             + hunter_text)
 
     return "\n\n".join(parts)
 

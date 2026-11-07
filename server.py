@@ -275,8 +275,10 @@ def env_profiles() -> list[dict]:
 _ENV_LOCK = threading.Lock()
 
 
-def update_env_file(updates: dict[str, str]) -> dict:
+def update_env_file(updates: dict[str, str], remove=()) -> dict:
     """把值写回 .env：保留原来的注释和顺序，没有的变量追加到末尾。先备份成 .env.bak。
+
+    `remove`：要从 .env 里删掉的变量名集合（页面删除 `.env` 档案时用）。
 
     ⚠️ 这里自己做一遍校验，而不是只依赖 HTTP 层的白名单：
     早先的漏洞是"变量名合法、但值里带 \\n"，拼出来就多出一行、等于写进任意变量。
@@ -301,11 +303,17 @@ def update_env_file(updates: dict[str, str]) -> dict:
         if len(text) > MAX_ENV_VALUE:
             raise ValueError(f"{name} 的值太长了（{len(text)} 字符，上限 {MAX_ENV_VALUE}）")
 
+    remove_names: set[str] = set()
+    for name in remove or ():
+        raw = str(name or "").strip()
+        if not SAFE_NAME_RE.match(raw) or not ENV_NAME_RE.match(raw.upper()):
+            raise ValueError(f"不允许删除这个变量名：{name!r}")
+        remove_names.add(raw.upper())
     with _ENV_LOCK:
-        return _update_env_file_locked(updates)
+        return _update_env_file_locked(updates, remove_names)
 
 
-def _update_env_file_locked(updates: dict[str, str]) -> dict:
+def _update_env_file_locked(updates: dict[str, str], remove=frozenset()) -> dict:
     """真正读-改-写的那一段（调用前必须已经拿到 `_ENV_LOCK`）。"""
     backup = ENV_PATH + ".bak"
     #: 这一次调用有没有**真的**做出一份新鲜备份。
@@ -328,12 +336,15 @@ def _update_env_file_locked(updates: dict[str, str]) -> dict:
         lines = []
 
     replaced: list[str] = []
+    removed: list[str] = []
     seen: set[str] = set()
     out: list[str] = []
     for line in lines:
         stripped = line.strip()
         match = None if stripped.startswith("#") else ENV_LINE_RE.match(stripped)
-        if match and match.group(1) in updates:
+        if match and match.group(1).upper() in remove:
+            removed.append(match.group(1))
+        elif match and match.group(1) in updates:
             name = match.group(1)
             out.append(f"{name}={updates[name]}")
             replaced.append(name)
@@ -367,7 +378,8 @@ def _update_env_file_locked(updates: dict[str, str]) -> dict:
         except OSError:
             pass
         raise
-    return {"replaced": sorted(replaced), "appended": sorted(appended)}
+    return {"replaced": sorted(replaced), "appended": sorted(appended),
+            "removed": sorted(removed)}
 
 
 def needs_token(request: Request) -> bool:
@@ -4340,8 +4352,35 @@ async def api_settings_api_save(request: Request):
     return JSONResponse(_settings_payload(data))
 
 
+def _config_profile_refs(profile: str) -> list[str]:
+    """看当前启动配置是否还把这个档案当默认/座位/兜底用。
+
+    `.env` 和 `settings.local.json` 删了，但 config 里写死的 profile 不会自动改；
+    提前给页面一句警告，避免删完才发现某个座位没有 key。
+    """
+    if ROOM is None or not isinstance(ROOM.cfg, dict):
+        return []
+    cfg = ROOM.cfg
+    llm = cfg.get("llm") or {}
+    refs: list[str] = []
+    default = llm.get("default")
+    if isinstance(default, dict) and str(default.get("profile") or "") == profile:
+        refs.append("llm.default")
+    for role, block in (llm.get("roles") or {}).items():
+        if isinstance(block, dict) and str(block.get("profile") or "") == profile:
+            refs.append(f"llm.roles.{role}")
+    for seat, block in (llm.get("seats") or {}).items():
+        if isinstance(block, dict) and str(block.get("profile") or "") == profile:
+            refs.append(f"llm.seats.{seat}")
+    game = cfg.get("game")
+    if isinstance(game, dict) and profile in [str(x) for x in game.get("fallback") or []]:
+        refs.append("game.fallback")
+    return refs
+
+
 @app.post("/api/settings/local/apis/delete")
 async def api_settings_api_delete(request: Request):
+    """删一条 API：页面存的删页面；`.env` 里的也一起删（页面上的删除按钮对两种来源一视同仁）。"""
     body = await _read_json_body(request)
     if body is None:
         return JSONResponse({"ok": False, "error": "请求格式不对"}, status_code=400)
@@ -4351,17 +4390,38 @@ async def api_settings_api_delete(request: Request):
     data = _local_settings()
     try:
         pid = settings_store.normalize_id(body.get("id"))
-        if not any(a["id"] == pid for a in data["apis"]):
-            return JSONResponse({"ok": False,
-                                 "error": "这条 API 来自 .env，页面不替你去改它；要删就去编辑 .env"},
-                                status_code=400)
-        data = settings_store.delete_api(data, pid)
     except ValueError as exc:
         return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
-    settings_store.save(HERE, data)
+
+    local_exists = any(a["id"] == pid for a in data["apis"])
+    base_name, _, _ = profile_vars(pid)
+    env_prefix = base_name[:-len("_BASE_URL")] if base_name.endswith("_BASE_URL") else ""
+    env_names = {f"{env_prefix}{suffix}" for suffix in SUFFIXES} if env_prefix else set()
+    env_exists = bool(env_names) and any(e["name"].upper() in env_names for e in env_entries())
+    if not local_exists and not env_exists:
+        return JSONResponse({"ok": False, "error": f"找不到 API「{pid}」"}, status_code=400)
+    if env_prefix in _ENV_PROFILE_SKIP:
+        return JSONResponse({"ok": False, "error": f"{env_prefix} 是保留档案，不允许从页面删除"},
+                            status_code=400)
+
+    if local_exists:
+        data = settings_store.delete_api(data, pid)
+        settings_store.save(HERE, data)
+    if env_exists:
+        # `.env` 里可能有同名的三/四行；一起删，否则页面删完、下次重启又冒出来。
+        update_env_file({}, remove=env_names)
+        # load_env 只覆盖、不清旧键；删完必须再 pop 一次，进程内才真的没有旧 key。
+        load_env(ENV_PATH, force=True)
+        for name in env_names:
+            os.environ.pop(name, None)
     settings_store.forget(pid)
-    _apply_local_settings(data, f"已删除 API「{pid}」", clear_missing=True)
-    return JSONResponse(_settings_payload(data))
+    refs = _config_profile_refs(pid)
+    _apply_local_settings(data, f"已删除 API「{pid}」（含 .env 档案）", clear_missing=True)
+    payload = _settings_payload(data)
+    if refs:
+        payload["warning"] = (f"API「{pid}」已删，但启动配置还在引用它：{'、'.join(refs)}。"
+                              "请改配置后重启，否则这些座位会因缺 key 失败。")
+    return JSONResponse(payload)
 
 
 @app.post("/api/settings/local/seats")
