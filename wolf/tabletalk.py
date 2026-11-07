@@ -120,7 +120,7 @@ NIGHT_TASKS = frozenset(("witch", "dream", "guard", "lucky", "seer_check",
 #: 白天说话/投票任务：只发“白天怎么打”的段落。
 DAY_TASKS = frozenset(("speech", "pk_speech", "sheriff_speech", "last_words",
                        "vote", "sheriff_vote", "sheriff_run", "claim", "badge",
-                       "wolf_explode"))
+                       "wolf_explode", "knight_judge"))
 #: 竞选相关任务：才发“上警报不报身份 / 上警代价”。
 SHERIFF_TASKS = frozenset(("sheriff_run", "sheriff_speech", "sheriff_vote", "badge"))
 #: 出局时的技能任务：猎枪、幸运儿子弹、狼王带人。
@@ -366,6 +366,7 @@ def claimed_role_title(role_name: str, assumed: bool = False, raw: str = "") -> 
                 "「验人结果」这类信息只能来自你**自己编好的那套说法**，"
                 "而且必须跟你已经说过的话对得上。")
     return (f"【你声称的身份：{role_name}（穿身份的参考章）】\n"
+            "⚠️ 这是参考资料，不是当前任务；当前任务和输出格式在包尾。\n"
             "你**已经报名**了这个身份，所以下面这一章也是你的："
             "照着它的**口吻和纪律**说话，出手手法仍按你自己的狼章来。\n"
             "⚠️ 这是**真玩家手里那张牌**的思路，不是给你换打法的："
@@ -387,8 +388,14 @@ def _read(path: str) -> str:
         return ""
 
 
+#: 模型包里的作者注/日期（`（2026-11-07 真局补）`、`（用户 2026-10-08 复盘）`）。
+#: 这些是给维护者看的变更痕迹，不是给模型判断的规则；留在指令里只会增加噪音。
+_AUTHOR_NOTE = re.compile(r"（[^（）]*20\d{2}-\d{1,2}-\d{1,2}[^（）]*）")
+
+
 def _clean(text: str) -> str:
-    """去掉 markdown 噪音（标题井号、粗体星号），模型读纯文本更省心。"""
+    """去掉 markdown 噪音（标题井号、粗体星号）和作者注/日期，模型读纯文本更省心。"""
+    text = _AUTHOR_NOTE.sub("", text)
     out: list[str] = []
     for raw in text.splitlines():
         line = raw.rstrip()
@@ -601,7 +608,7 @@ def lint_meta_book(text: str) -> list[str]:
         return []
     hay = persona_mod._norm_for_match(text)
     bad = [w for w in ("我是狼", "我是预言家", "我是女巫", "我是猎人", "我的身份是",
-                   "我是愚者", "我是白痴", "我是摄梦人", "我是守墓人", "我是养鸦人", "我是幸运儿",
+                   "我是愚者", "我是白痴", "我是摄梦人", "我是守墓人", "我是养鸦人", "我是幸运儿", "我是骑士",
                    "我是狼王")
            if persona_mod._norm_for_match(w) in hay]
     return [f"概念库（进包段落）里出现了第一人称身份声明：{('、'.join(bad))}"] if bad else []

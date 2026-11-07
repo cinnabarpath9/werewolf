@@ -418,6 +418,7 @@
   }
   .support-link:hover{background:rgba(228,192,124,.16);transform:translateY(-1px)}
   .support-pans{display:flex;gap:10px;flex-wrap:wrap}
+  .provider-note{margin-top:14px!important;padding-top:12px;border-top:1px solid var(--line);font-size:12.5px!important}
 
   /* 对局结果贡献条 + 统计卡（2026-10-31） */
   .model-chip{
@@ -847,9 +848,62 @@
     <section class="support-card">
       <div class="support-emoji" aria-hidden="true">⬇</div>
       <div class="support-body">
-        <b>其他下载渠道</b>
-        <p>进不去 GitHub 的话，这两个网盘放的是同一份发布包。</p>
-        <div class="support-pans" id="supportPans"></div>
+        <b>网盘下载</b>
+        <p>进不去 GitHub 的话，两个网盘放的是同一份发布包；点进去再选夸克或百度。</p>
+        <a class="support-link" href="#" data-screen="downloads">打开网盘下载页 →</a>
+      </div>
+    </section>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════════
+     网盘下载（二级页）：夸克 / 百度放同一份包，不再各占主页一个入口
+     ══════════════════════════════════════════════════════════════════ -->
+<div id="downloads" class="screen sub-screen" hidden>
+  <div class="sub-shell support-shell">
+    <header class="sub-head">
+      <button class="icon-btn" id="btnDownloadsBack" type="button" aria-label="返回大厅">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg>
+      </button>
+      <div>
+        <div class="eyebrow">Downloads</div>
+        <h2>网盘下载</h2>
+      </div>
+    </header>
+    <p class="support-intro">两个网盘放的是同一份发布包，按你平时能打开的那个选就行。</p>
+    <section class="support-card">
+      <div class="support-emoji" aria-hidden="true">⬇</div>
+      <div class="support-body">
+        <b>选择网盘</b>
+        <p>夸克和百度二选一；下载后按包里的《部署说明》启动。</p>
+        <div class="support-pans" id="downloadPans"></div>
+      </div>
+    </section>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════════
+     模型获取与选择（二级页）：作者测试渠道 + 模型推荐
+     ══════════════════════════════════════════════════════════════════ -->
+<div id="providers" class="screen sub-screen" hidden>
+  <div class="sub-shell support-shell">
+    <header class="sub-head">
+      <button class="icon-btn" id="btnProvidersBack" type="button" aria-label="返回大厅">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg>
+      </button>
+      <div>
+        <div class="eyebrow">Model API</div>
+        <h2>模型获取与选择</h2>
+      </div>
+    </header>
+    <p class="support-intro">这是作者制作和测试本作时使用的 API 渠道，方便你一次把模型配齐；它不是本项目的官方充值入口，价格、可用性和模型名单以渠道页面为准。</p>
+    <section class="support-card">
+      <div class="support-emoji" aria-hidden="true">🧠</div>
+      <div class="support-body">
+        <b>作者测试渠道</b>
+        <p>注册后按页面给的地址、Key 填到「设置 → 模型 API」即可；本项目接的是 OpenAI 兼容接口。</p>
+        <a class="support-link" href="https://api.52pay.com/register?aff=RIXf" target="_blank" rel="noopener noreferrer sponsored">打开模型渠道 →</a>
+        <p class="provider-note">推荐模型：<b>DeepSeek</b>（主力、便宜、稳定）、<b>Google Gemini</b>（长上下文/复杂局）、<b>MiniMax</b>（响应快）、<b>GLM</b>（中文稳）、<b>Claude</b>（文本质量/角色扮演）。先用 DeepSeek 跑通，再按预算和速度加其他家。</p>
       </div>
     </section>
   </div>
@@ -1433,7 +1487,9 @@ let startTimer = 0;             // 「确认开局」后的兜底计时器
 
 //: 板子在页面上的名字与光晕。服务端只给规则摘要，标题属于表达层，放前端。
 const BOARD_META = {
-  eleven_wolfking: { title: '狼王局', glow: 'rgba(228,192,124,.17)',
+  eleven_knight: { title: '骑士局', glow: 'rgba(228,192,124,.17)',
+                   blurb: '首夜无刀，骑士白天一次审判，狼王与骑士可同归于尽；预女骑愚 + 摄梦/守墓/养鸦，屠边。' },
+  eleven_wolfking: { title: '狼王局（旧）', glow: 'rgba(228,192,124,.17)',
                      blurb: '首夜无刀，狼王出局可带走一名好人。预女梦愚 + 三张民牌，屠边。' },
   twelve_standard: { title: '标准十二人', glow: 'rgba(125,156,255,.17)',
                      blurb: '经典预女猎白，四狼四民。屠边，带警长竞选。' },
@@ -1452,14 +1508,18 @@ function showScreen(name) {
   $('room').hidden = name !== 'room';
   $('join').hidden = name !== 'join';
   $('support').hidden = name !== 'support';
+  $('downloads').hidden = name !== 'downloads';
+  $('providers').hidden = name !== 'providers';
   $('apiParams').hidden = name !== 'apiParams';
   if (name === 'home') renderHome();
   if (name === 'picker') renderPicker();
   if (name === 'settings') renderSettings();
   if (name === 'room') renderRoom();
   if (name === 'support') renderSupport();
+  if (name === 'downloads') renderDownloads();
   const box = { home: $('home'), picker: $('picker'), settings: $('settings'),
                 room: $('room'), join: $('join'), support: $('support'),
+                downloads: $('downloads'), providers: $('providers'),
                 apiParams: $('apiParams') }[name];
   if (box) box.scrollTop = 0;
 }
@@ -2467,16 +2527,17 @@ function renderSiteLinks() {
       <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 21s-7.5-4.6-9.4-9A5.4 5.4 0 0 1 12 6.2 5.4 5.4 0 0 1 21.4 12c-1.9 4.4-9.4 9-9.4 9Z"/></svg>
       感谢赞助</a>`);
   }
-  // 2026-11-02：主页也放网盘入口（用户要求「云端页面也加这几个跳转」）
+  // 2026-11-07：两个网盘合成一个「网盘下载」二级页；省出的位置放「模型获取与选择」。
   const pansHome = (Array.isArray(SITE.pans) && SITE.pans.length)
     ? SITE.pans : (typeof PAN_FALLBACK !== 'undefined' ? PAN_FALLBACK : []);
-  for (const p of pansHome) {
-    if (!p || !/^https?:\/\//i.test(p.url || '')) continue;
-    const code = p.code ? `（提取码 ${escapeHtml(p.code)}）` : '';
-    out.push(`<a class="home-link" href="${escapeHtml(p.url)}" target="_blank" rel="noopener noreferrer">
+  if (pansHome.some(p => p && /^https?:\/\//i.test(p.url || ''))) {
+    out.push(`<a class="home-link" href="#" data-screen="downloads">
       <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 3v10m0 0 4-4m-4 4-4-4M5 17h14v3H5z"/></svg>
-      ${escapeHtml(p.name || '下载')}${code}</a>`);
+      网盘下载</a>`);
   }
+  out.push(`<a class="home-link" href="#" data-screen="providers">
+    <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 3a4 4 0 0 1 4 4c0 1.4-.7 2.6-1.8 3.3A4 4 0 0 1 16 14v3h-2v-3a2 2 0 0 0-4 0v3H8v-3a4 4 0 0 1 1.8-3.7A4 4 0 0 1 12 3Zm0 2a2 2 0 1 0 0 4 2 2 0 0 0 0-4Z"/></svg>
+    模型获取与选择</a>`);
   if (!out.length) {
     // 没填链接时给右下角一个安静版本号，别留一块完全空着的角
     out.push(`<span class="home-link" style="cursor:default">v${escapeHtml(SITE.version || '1.0.0')}</span>`);
@@ -2652,8 +2713,11 @@ function renderSupport() {
   const qq = /^https?:\/\//i.test(SITE.qq_link) ? SITE.qq_link : 'https://qm.qq.com/q/68VcRJr3Py';
   $('supportQq').href = qq;
 
+  }
+
+function renderDownloads() {
   const pans = (Array.isArray(SITE.pans) && SITE.pans.length) ? SITE.pans : PAN_FALLBACK;
-  $('supportPans').innerHTML = pans
+  $('downloadPans').innerHTML = pans
     .filter(p => p && /^https?:\/\//i.test(p.url || ''))
     .map(p => {
       const code = p.code ? `（提取码 ${escapeHtml(p.code)}）` : '';
@@ -2749,7 +2813,7 @@ function openRoom() {
 }
 
 function roomBoardSeats() {
-  const name = MP.board || (MP.room && MP.room.board) || (S.status && S.status.default_board) || 'eleven_wolfking';
+  const name = MP.board || (MP.room && MP.room.board) || (S.status && S.status.default_board) || 'eleven_knight';
   const b = boardBySeats(name);
   return b ? (Number(b.seats) || 11) : 11;
 }
@@ -2923,6 +2987,20 @@ $('btnRoomBack').onclick = () => showScreen('home');
 $('btnJoinBack').onclick = () => showScreen('home');
 $('btnSupport').onclick = () => showScreen('support');
 $('btnSupportBack').onclick = () => showScreen('home');
+$('btnDownloadsBack').onclick = () => showScreen('home');
+$('btnProvidersBack').onclick = () => showScreen('home');
+$('homeLinks').addEventListener('click', (ev) => {
+  const link = ev.target.closest('[data-screen]');
+  if (!link) return;
+  ev.preventDefault();
+  showScreen(link.dataset.screen);
+});
+$('support').addEventListener('click', (ev) => {
+  const link = ev.target.closest('[data-screen]');
+  if (!link) return;
+  ev.preventDefault();
+  showScreen(link.dataset.screen);
+});
 $('btnParamsBack').onclick = () => { showScreen('settings'); };
 $('pSave').onclick = saveApiParams;
 $('pReset').onclick = resetApiParams;
@@ -4646,7 +4724,7 @@ function onAutoRetry(m) {
 }
 // ⚠️ 优先用**服务端配置里的默认板子**（default_board），而不是上一局房间的板子：
 //    否则跑过一次别的板子之后，开局面板的默认值就被那一局带偏了。
-function curBoard() { return S.pick.board || S.status.default_board || S.status.board || 'eleven_wolfking'; }
+function curBoard() { return S.pick.board || S.status.default_board || S.status.board || 'eleven_knight'; }
 function curSeat() { return S.pick.seat || S.status.human_seat || 1; }
 
 function renderFooter() {
@@ -4782,7 +4860,7 @@ function renderFooter() {
 
   const boards = st.boards || [];
   const curBName = curBoard();
-  const current = boards.find(b => b.name === curBName) || boards[0] || { seats: 11, name: 'eleven_wolfking', label: '' };
+  const current = boards.find(b => b.name === curBName) || boards[0] || { seats: 11, name: 'eleven_knight', label: '' };
   const seatCount = current.seats || 9;
 
   if (boards.length) {
@@ -4938,6 +5016,7 @@ function renderAsk(f, ask) {
     witch: '女巫用药', hunter_shoot: '猎人开枪', lucky_shoot: '幸运儿开枪', guard: '守卫行动：今晚守谁',
     dream: '摄梦人行动：今晚摄谁（可以空过）',
     lucky: '幸运儿：用掉这一次性技能吗',
+    knight_judge: '骑士审判：是否发动？',
     /* 狼王（新板子 eleven_wolfking）：出局时当场带走一名好人（名单里没有狼队友） */
     wolf_king_take: '狼王出局：带走一个人（不能带狼队友）',
     sheriff_run: '要不要竞选警长', sheriff_speech: '轮到你竞选发言',
@@ -5320,6 +5399,37 @@ function renderAsk(f, ask) {
     btnRow.appendChild(confirm);
     btnRow.appendChild(later);
     f.appendChild(btnRow);
+    return;
+  }
+
+  // 骑士审判（新默认板）：先决定是否发动，再选目标；不发动直接提交。
+  if (ask.kind === 'knight_judge') {
+    const hint = document.createElement('div');
+    hint.className = 'hint';
+    hint.textContent = '每局一次：审判狼人 → 对方翻牌出局；审判狼王 → 你和狼王一起出局，狼王不能带人；审判好人 → 只公示对方是好人阵营，你不出局，但票权降为 0.5。无论结果，今天照常放逐投票。';
+    f.appendChild(hint);
+    const row = document.createElement('div'); row.className = 'seatpick';
+    let picked = null;
+    legal.forEach(id => {
+      const b = mkBtn(id + '号', () => {
+        picked = id;
+        [...row.children].forEach(x => x.classList.remove('on'));
+        b.classList.add('on');
+      });
+      row.appendChild(b);
+    });
+    f.appendChild(row);
+    const confirm = mkBtn('发动审判', () => {
+      if (picked === null) { toast('先选一个审判目标'); return; }
+      answer({ use: true, target: picked, reason: '人类玩家自己决定' });
+      S.ask = null; renderFooter();
+    }, 'primary');
+    const no = mkBtn('不发动（保留到以后）', () => {
+      answer({ use: false, reason: '人类玩家选择不发动' });
+      S.ask = null; renderFooter();
+    }, 'ghost');
+    const btnRow = document.createElement('div'); btnRow.className = 'seatpick';
+    btnRow.appendChild(confirm); btnRow.appendChild(no); f.appendChild(btnRow);
     return;
   }
 

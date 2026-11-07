@@ -62,20 +62,20 @@ ROLES: dict[str, RoleDef] = {
     #:   · **连续两晚**成为梦游者也会死亡。
     #: 用户附加的口径（以用户为准）：**摄梦对象 + 女巫解药 = 奶穿**（和同守同救一样，照样死）。
     "dreamer": RoleDef(
-        "dreamer", "摄梦人", GOOD, "god", "dream",
+        "dreamer", "摄梦人", GOOD, "villager", "dream",
         "你每晚**可以**选一名玩家成为梦游者，也可以选择今晚空过：他不知道自己正在梦游，而且**免疫夜间伤害**"
         "（狼刀、毒药都伤不到他）。**连续两晚**摄同一个人，那个人会死；"
-        "你**在夜里出局不会带走**当晚的梦游者（2026-10-10 起取消「连死」）。"
+        "你**在夜里出局不会带走**当晚的梦游者。"
         "⚠️ 但如果你摄的人同时又挨了女巫的解药 —— **照样死**（奶穿，和同守同救一个道理）。",
     ),
     "idiot": RoleDef(
         #: 2026-10-09 用户改名：白痴 → **愚者**（key 保持 `idiot` 不变，避免全项目大改；
         #: 显示名与文案一律用「愚者」）。仍然**神民双料**。
         "idiot", "愚者", GOOD, "god", None,
-        "你没有夜晚技能。但如果你白天被投票放逐，你会翻开牌亮出【愚者】身份活下来 —— "
-        "代价是**从此失去投票权**（发言照常，还能继续给好人提供信息），"
-        "而且**翻牌之后别人再投你也不计票**。"
-        "你只在夜里被狼人杀害或被女巫毒死时才会真正出局。"
+        "你没有主动技能。你可以**免疫一次任何原因的出局**（被放逐、被刀、被毒、被奶穿、"
+        "同刀同毒、两连梦、被枪/被子弹/被狼王带走都算）：第一次致命结算时翻开牌亮出【愚者】身份，"
+        "取消这次出局；之后**仍然可以投票，票权为 0.5 票**（不是失去投票权）。"
+        "免疫只有一次，之后再死就是真死。"
         "⚠️ 屠边判定里你**既算神也算民**：狼人想屠神或屠民，都必须连你一起杀死。",
         also_kind="villager",
     ),
@@ -107,9 +107,17 @@ ROLES: dict[str, RoleDef] = {
     "wolf_king": RoleDef(
         "wolf_king", "狼王", WOLF, "wolf", "take_on_death",
         "你属于狼队，夜里和队友共同出刀（你没有额外的夜间技能）。"
-        "你的特权是**出局时**：只要你出局（被刀 / 被毒 / 被梦死 / 被奶穿 / 被放逐 / 被枪带走），"
+        "你的特权是**出局时**：**除被骑士审判同归于尽外**，只要你出局"
+        "（被刀 / 被毒 / 被梦死 / 被奶穿 / 被放逐 / 被枪带走），"
         "你都可以**当场带走场上一名好人**（**不能带走狼队友**，带谁要公开指定）。"
-        "⚠️ 本板子狼王**不能自爆**（2026-11-03 新规）：自爆这条路对你关闭。",
+        "⚠️ 本板子狼王**不能自爆**：自爆这条路对你关闭。",
+    ),
+    "knight": RoleDef(
+        "knight", "骑士", GOOD, "god", None,
+        "你每局有**一次**「骑士审判」：在白天放逐投票之前，可以公开翻牌审判一名其他玩家。"
+        "对方是狼人 → 对方翻牌出局（公示身份）；对方是狼王 → 你与狼王一起出局，狼王不能带人；"
+        "对方是好人 → 只公示对方是好人阵营（不公示职业），你不出局，但票权降为 0.5。"
+        "无论审判结果如何，当天的放逐投票都照常进行。",
     ),
     "lucky": RoleDef(
         "lucky", "幸运儿", GOOD, "villager", "lucky",
@@ -139,12 +147,16 @@ class BoardDef:
     #: 任何人出局时**当场公开他的身份牌**（夜里被刀/被毒/被梦死/被奶穿、白天被放逐，全都亮），
     #: **死因仍然不公示**（只亮身份、不解释怎么死的）。默认 False = 暗牌（只亮白痴翻牌）。
     reveal_on_death: bool = False
+    #: 是否出现在产品板子列表里（旧的默认板降为隐藏的回归/兼容板时置 False）
+    visible: bool = True
 
 
 def _b(name: str, roles: list[str], desc: str, win_rule: str = "sides",
-       first_night_quiet: bool = False, reveal_on_death: bool = False) -> BoardDef:
+       first_night_quiet: bool = False, reveal_on_death: bool = False,
+       visible: bool = True) -> BoardDef:
     return BoardDef(name=name, roles=roles, win_rule=win_rule, desc=desc,
-                    first_night_quiet=first_night_quiet, reveal_on_death=reveal_on_death)
+                    first_night_quiet=first_night_quiet, reveal_on_death=reveal_on_death,
+                    visible=visible)
 
 
 #: 常见配置，**不是官方标准**，你可以照着自己那套规则改，或者在 config.yaml 里自定义。
@@ -154,18 +166,26 @@ def _b(name: str, roles: list[str], desc: str, win_rule: str = "sides",
 #: （只给回归与考核题库复现历史机制，产品面板不列、`make_board` 也不认这些名字）。
 #: 退役板子的完整备份与恢复办法见 `docs/板子备份_已删除.md`。
 BUILTIN_BOARDS: dict[str, BoardDef] = {
-    # ⚠️ 顺序 = 手机端板子按钮的顺序：**默认板子放第一个**，一眼就能点到。
+    #: 2026-11-07 新默认板：幸运儿退场，摄梦人降为民（机制不变），新增骑士；
+    #: 愚者改成「任何死因免疫一次 + 保留 0.5 票」。
+    "eleven_knight": _b("eleven_knight",
+                        ["wolf", "wolf", "wolf", "wolf_king",
+                         "seer", "witch", "knight", "idiot",
+                         "dreamer", "gravekeeper", "crow"],
+                        "11 人（骑士版·**当前默认**）：3 狼 + 1 狼王 + 预言家、女巫、"
+                        "**骑士**、**愚者** + **摄梦人（民）/守墓人/养鸦人**。"
+                        "首夜无刀；女巫与摄梦人从第 2 夜起行动。"
+                        "骑士每局一次白天审判（狼死/好人只公示阵营且骑士掉到 0.5 票/狼王与骑士同死且不能带人），"
+                        "审判后仍正常放逐投票。愚者免疫一次任何出局、保留 0.5 票；算神也算民。",
+                        first_night_quiet=True),
+    #: 旧默认板：保留给回归/旧存档/考题，不在产品板子列表里显示。
     "eleven_wolfking": _b("eleven_wolfking",
                           ["wolf", "wolf", "wolf", "wolf_king",
                            "seer", "witch", "dreamer", "idiot",
                            "gravekeeper", "crow", "lucky"],
-                          "11 人（狼王版·**当前默认**）：**3 狼 + 1 狼王** + 预言家、女巫、**摄梦人**、"
-                          "**愚者** + **守墓人 / 养鸦人 / 幸运儿**（三张民牌）。"
-                          "**首夜无刀**：第 1 夜狼队/女巫/摄梦人都不动，只跑一次预言家验人；"
-                          "**女巫与摄梦人从第 2 夜起**才行动（所以银水从第一夜挪到第二夜）。"
-                          "**狼王**任何原因出局（含被毒；**不含自爆**——11 人板禁爆）都能当场带走一名好人、**不能带队友**；"
-                          "**死亡结算 → 狼王带人 → 再判屠边**。愚者**算民也算神**，有警长竞选。",
-                          first_night_quiet=True),
+                          "11 人（旧狼王版，已隐藏）：3 狼 + 1 狼王 + 预言家、女巫、摄梦人、"
+                          "愚者 + 守墓人/养鸦人/幸运儿（2026-11-07 被骑士版取代）。",
+                          first_night_quiet=True, visible=False),
     "twelve_standard": _b("twelve_standard",
                           ["wolf", "wolf", "wolf", "wolf",
                            "seer", "witch", "hunter", "idiot",
@@ -220,7 +240,8 @@ def make_board(name: "str | BoardDef", custom: dict | None = None) -> BoardDef:
         return BoardDef(name=name.name, roles=list(name.roles),
                         win_rule=name.win_rule, desc=name.desc,
                         first_night_quiet=bool(getattr(name, "first_night_quiet", False)),
-                        reveal_on_death=bool(getattr(name, "reveal_on_death", False)))
+                        reveal_on_death=bool(getattr(name, "reveal_on_death", False)),
+                        visible=bool(getattr(name, "visible", True)))
     if custom and name in custom:
         raw = custom[name] or {}
         roles = raw.get("roles") if isinstance(raw, dict) else raw
@@ -230,7 +251,8 @@ def make_board(name: "str | BoardDef", custom: dict | None = None) -> BoardDef:
                         # 自定义板子也能开「首夜无刀」（config.yaml 里写 first_night_quiet: true）
                         first_night_quiet=bool((raw or {}).get("first_night_quiet")) if isinstance(raw, dict) else False,
                         # 自定义板子也能开「出局亮身份」（config.yaml 里写 reveal_on_death: true）
-                        reveal_on_death=bool((raw or {}).get("reveal_on_death")) if isinstance(raw, dict) else False)
+                        reveal_on_death=bool((raw or {}).get("reveal_on_death")) if isinstance(raw, dict) else False,
+                        visible=bool((raw or {}).get("visible", True)) if isinstance(raw, dict) else True)
     if name in BUILTIN_BOARDS:
         # ⚠️ 必须**拷贝**再返回：直接返回模块级对象的话，谁写一句
         # `board.roles.append(...)` 就把 BUILTIN_BOARDS 本身改了，
@@ -239,7 +261,8 @@ def make_board(name: "str | BoardDef", custom: dict | None = None) -> BoardDef:
         return BoardDef(name=base.name, roles=list(base.roles),
                         win_rule=base.win_rule, desc=base.desc,
                         first_night_quiet=bool(getattr(base, "first_night_quiet", False)),
-                        reveal_on_death=bool(getattr(base, "reveal_on_death", False)))
+                        reveal_on_death=bool(getattr(base, "reveal_on_death", False)),
+                        visible=bool(getattr(base, "visible", True)))
     raise KeyError(f"没有这个板子：{name}（内置：{'、'.join(BUILTIN_BOARDS)}）")
 
 
@@ -257,7 +280,7 @@ def validate_board(board: BoardDef) -> list[str]:
     # 屠神边也要多杀一个，而"对跳预言家"整类判断失去基准。
     # ⚠️ 2026-10-25 修：这段原来被缩进在上面 `if unknown:` 里面 —— 于是**只有拼错角色名时才会查重复**，
     #    正常的板子写两个预言家能一路通过校验。（已复现：`[wolf,wolf,seer,seer,...]` 当时 issues 为空。）
-    for _k in ("seer", "witch", "hunter", "guard", "idiot"):
+    for _k in ("seer", "witch", "hunter", "guard", "idiot", "knight"):
         if list(roles).count(_k) > 1:
             issues.append(f"唯一角色 {_k} 出现了 {list(roles).count(_k)} 次")
     if len(roles) < 5:

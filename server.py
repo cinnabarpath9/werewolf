@@ -1715,6 +1715,8 @@ class Room:
             }
 
         for key, item in BUILTIN_BOARDS.items():
+            if not getattr(item, "visible", True):
+                continue
             out.append(board_row(key, item, False))
         for key in (self.game_cfg.get("boards") or {}):
             try:

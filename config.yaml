@@ -34,7 +34,7 @@ llm:
   seats: {}                 # 按座位覆盖，例：1: {profile: GLM, thinking: low}
 
 game:
-  board: eleven_wolfking    # 默认板子；可选 twelve_standard / nine_all / six_all_reveal
+  board: eleven_knight      # 默认板子；可选 twelve_standard / nine_all / six_all_reveal
   boards: {}                # 自定义板子写在这里
 
   human_seat: 6             # 0 = 全 AI；1..N = 你坐这个座位

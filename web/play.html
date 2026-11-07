@@ -74,9 +74,9 @@
         <div class="n">6 人明牌板（推荐试玩）</div>
         <div class="note">2 狼 + 预言家 + 女巫 + 2 民；出局亮身份。一局约 5~10 分钟，流程最短，适合先试手感。</div>
       </div>
-      <div class="board" data-board="eleven_wolfking">
-        <div class="n">11 人狼王板（完整流程）</div>
-        <div class="note">3 狼 + 狼王 + 预女梦愚 + 三张民牌；首夜无刀。一局约 20~30 分钟，模型调用会明显更慢。</div>
+      <div class="board" data-board="eleven_knight">
+        <div class="n">11 人骑士板（完整流程）</div>
+        <div class="note">3 狼 + 狼王 + 预女骑愚 + 摄梦/守墓/养鸦；首夜无刀，骑士一次审判。一局约 20~30 分钟，模型调用会明显更慢。</div>
       </div>
     </div>
   </div>
@@ -265,6 +265,7 @@ const LABEL = {
   speech: '轮到你发言', sheriff_speech: '轮到你竞选发言', vote: '轮到你投票',
   wolf_kill: '狼队：今晚杀谁', wolf_talk: '狼队讨论', seer_check: '预言家查验',
   witch: '女巫用药', guard: '守卫行动', dream: '摄梦人行动', lucky: '幸运儿技能',
+  knight_judge: '骑士审判：是否发动',
   hunter_shoot: '猎人开枪', lucky_shoot: '幸运儿开枪', wolf_king_take: '狼王带走一人', last_words: '你的遗言',
   badge: '警徽怎么处理', sheriff_run: '要不要竞选警长', sheriff_order: '警长定发言方向',
   wolf_explode: '要不要自爆', sheriff_vote: '投警长',
@@ -314,6 +315,18 @@ function renderAsk(ask) {
     for (const n of legal) row.appendChild(btn(n + '号', { vote: n }));
     row.appendChild(btn('弃权', { abstain: true, reason: '弃权' }));
     body.appendChild(row);
+    return;
+  }
+
+  // 骑士审判：先选目标（可选不发动）；审判后今天仍照常投票。
+  if (ask.kind === 'knight_judge') {
+    const r = document.createElement('div'); r.className = 'row';
+    for (const n of legal) {
+      r.appendChild(btn('审判 ' + n + '号', { use: true, target: n, reason: '人类玩家自己决定' }));
+    }
+    body.appendChild(r);
+    body.appendChild(btn('不发动（保留到以后）',
+      { use: false, reason: '人类玩家选择不发动' }));
     return;
   }
 

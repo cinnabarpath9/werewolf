@@ -72,6 +72,7 @@ CAUSE_TEXT = {
     "explode": "自爆出局",
     # 狼王（新板子 `eleven_wolfking`）：被他临死前带走
     "king": "被狼王带走",
+    "knight": "被骑士审判出局",
 }
 
 #: 狼王自爆时要**同时回答**"带走谁" —— 这段提示与 schema 字段**只写这里一份**。
@@ -311,7 +312,9 @@ class Seat:
     lucky_used: bool = False                                # 幸运儿：一次性技能是否已用掉
     #: 幸运儿选了「子弹」：还没打出去时是 True；出局时按死因决定能否开枪（毒/梦死不能）。
     lucky_bullet: bool = False
-    revealed_idiot: bool = False                            # 白痴：已经翻牌了（活着但不能再投票）
+    knight_used: bool = False                               # 骑士：本局审判是否已经发动
+    knight_failed: bool = False                             # 骑士：审判到好人后票权降为 0.5（不出局）
+    revealed_idiot: bool = False                            # 愚者：已经翻牌免疫过一次（仍可投票，票权 0.5）
     #: 狼王（新板子 `eleven_wolfking`）：他临死那一口**只能带走一次**。
     #: 为什么要有这个标记：他能被四种路径弄死（夜里死 / 被放逐 / 被枪带走 / 自爆），
     #: 每条路径都要在"判胜负之前"给他一次带人机会 —— 没有这个闸，一条路径补了、
@@ -1530,12 +1533,15 @@ class Game:
         （考试题库就有一处直接置 `sheriff_id`）都能算出"死人的一票算 1.5 票"的公告。
         这里加一道闸：人不在场/已翻牌白痴 → 权重按普通票（他们本来也投不了票）。
         """
-        if self.sheriff_id != seat_id:
-            return 1.0
         seat = self.seat_by_id(seat_id)
-        if seat is None or not seat.alive or seat.revealed_idiot:
+        if seat is None or not seat.alive:
             return 1.0
-        return 1.5
+        # 愚者/无能骑士即使拿了警徽，票权也按 0.5 算（作者口径：保留 0.5，不是清零）。
+        if seat.revealed_idiot or getattr(seat, "knight_failed", False):
+            return 0.5
+        if self.sheriff_id == seat_id:
+            return 1.5
+        return 1.0
 
     def weighted_counts(self, votes: dict[int, int | None],
                         candidates: list[int] | None = None) -> dict[int, float]:
@@ -1924,8 +1930,7 @@ class Game:
           · vote：本轮票谁（投票环节直接复用，不再多花一次高思考调用）
         这份分析会写进座位记忆（mind），后面几天的发言与决策都建立在它之上。
         """
-        pool = [i for i in (list(candidates) if candidates else self.alive_ids())
-                if not self.seat_by_id(i).revealed_idiot]
+        pool = list(candidates) if candidates else self.alive_ids()
         decided: dict[int, dict] = {}
 
         async def one(seat: Seat) -> tuple[Seat, dict]:
@@ -1957,7 +1962,7 @@ class Game:
                               "curse_legal": self._crow_curse_legal(seat, day)}
             return seat, await self.act(seat, task)
 
-        voters = [s for s in self.alive if not s.revealed_idiot and not s.is_human]
+        voters = [s for s in self.alive if not s.is_human]
         gathered = await asyncio.gather(*(one(s) for s in voters), return_exceptions=True)
         for item in gathered:
             if isinstance(item, BaseException):
@@ -2150,18 +2155,30 @@ class Game:
         day = self.day
 
         # --- 1) 先结算死亡（用户定的顺序：第一天白天**先**结算死亡，再竞选警徽）---
+        # 愚者第一次受到任何死因都翻牌免疫；必须在“昨晚出局”公告之前把它摘掉，
+        # 否则公告会宣布一个实际还活着的人死了。
+        night_deaths = list(night_deaths)
+        immune_night: list[tuple[int, str]] = []
+        for sid, cause in list(night_deaths):
+            seat = self.seat_by_id(sid)
+            if seat and seat.role_key == "idiot" and not seat.revealed_idiot:
+                night_deaths.remove((sid, cause))
+                immune_night.append((sid, cause))
         if night_deaths:
             who = "、".join(f"{sid}号" for sid, _ in night_deaths)
             self.ledger.add(day, "day", "announce", f"昨晚出局：{who}。（不公布死因）")
         elif self.first_night_quiet and day == 1:
             # 「首夜无刀」板子的第一天：昨晚必然没人出局，但**原因不是**女巫救人、也不是守中 ——
             # 说成"平安夜"会让模型去盘"谁被守了/谁被救了"（它拿不到任何证据，纯属浪费推理）。
-            # 这是**公开规则**（规则书里就写着第一夜狼人不行动），所以照实写不算泄密。
+            # 这是**公开规则**（规则书里就写着第一夜狼人不动手），所以照实写不算泄密。
             self.ledger.add(day, "day", "announce",
                             "昨晚是平安夜，没有人出局。（本板子【首夜无刀】：第一夜狼队不行动，"
                             "所以这不是「守中」或「女巫用药」的结果。）")
         else:
             self.ledger.add(day, "day", "announce", "昨晚是平安夜，没有人出局。")
+        # 愚者翻牌免疫的公告放在死讯之后；不公布死因，只公开身份。
+        for sid, cause in immune_night:
+            self._idiot_reveal(self.seat_by_id(sid), cause=cause)
 
         for seat_id, cause in night_deaths:
             self.kill(seat_id, cause)
@@ -2299,6 +2316,12 @@ class Game:
         if self.check_win():
             return
 
+        # --- 骑士审判：白天全场发言结束后、放逐投票开始前，每局一次 ---
+        # ⚠️ 用户 2026-11-07 口径：审判后**当天放逐投票照常**，不因戳死狼/自己与狼王同归于尽而跳票。
+        await self.knight_judge(day)
+        if self.check_win():
+            return
+
         # --- 投票前的决策（高思考，全员并发）---
         # 放在**全部发言之后**：这时每个人都听完了所有人的发言，正好回答
         # "根据汇总发言，我该投谁"（用户口径：好人想投最像狼的，狼想票型怎么走，
@@ -2371,9 +2394,8 @@ class Game:
         # ⚠️ 2026-10-31 外部审查 E10：本轮"票面写了但没算"的座位（死人/翻牌愚者/不存在的号）。
         #    `vote_summary` 拿它把「无效票」和「弃权」分开写，别让公告自相矛盾。
         self._invalid_votes: set[int] = set()
-        pool = [i for i in (list(candidates) if candidates else self.alive_ids())
-                if not self.seat_by_id(i).revealed_idiot]
-        voters = [s for s in self.alive if not s.revealed_idiot]
+        pool = list(candidates) if candidates else self.alive_ids()
+        voters = list(self.alive)
 
         async def one_vote(voter: Seat):
             legal = [i for i in pool if i != voter.id] or list(pool)
@@ -2460,16 +2482,6 @@ class Game:
                                 data={"invalid": True, "target": dead_vote, "round": round_no,
                                       "lean": lean})
                 continue
-            if raw is not None and self.seat_by_id(raw).revealed_idiot:
-                votes[voter.id] = None
-                self._invalid_votes.add(voter.id)
-                self.ledger.add(day, "day", "vote",
-                                f"投给了已经翻过【白痴】牌的 {raw}号 —— 这一票无效（不计入计票）"
-                                f"{pk_tag}",
-                                seat=voter.id,
-                                data={"invalid": True, "target": raw, "round": round_no,
-                                      "lean": lean})
-                continue
             if raw is None:
                 # ⚠️⚠️ 2026-10-31 外部审查 P1-05：这是第三条"静默降智"的路 ——
                 #    模型回了个不存在的座位号 / 自己的座位 / PK 轮投候选外的人时，
@@ -2547,32 +2559,18 @@ class Game:
     async def exile(self, day: int, seat_id: int, votes: float) -> None:
         seat = self.seat_by_id(seat_id)
         score = self.fmt_votes(votes)
-        if seat.revealed_idiot:
-            # 已经翻过牌的白痴：按规则不能再被放逐。这里加一道防线，
-            # 免得以后有人直接调 exile（不经过投票名单过滤）就把规则破坏了。
-            self.ledger.add(day, "day", "announce",
-                            f"投票结果：{seat_id}号 得 {score} 票 —— 他已经翻过【愚者】牌，"
-                            f"这一轮不会被放逐。")
-            self.last_exiled = None               # 没人真的被放逐 → 守墓人这轮没信息
-            return
-        if seat.role_key == "idiot" and not seat.revealed_idiot:
-            # 白痴翻牌：不被放逐，但从此失去投票权（这是白痴的标准规则）
-            seat.revealed_idiot = True
-            self.last_exiled = None               # 愚者翻牌 = 没被放逐 → 守墓人这轮没信息
-            self.ledger.add(day, "day", "announce",
-                            f"投票结果：{seat_id}号 得 {score} 票 —— 他翻开牌亮出【愚者】身份，"
-                            f"本轮不会被放逐，但从现在起失去投票权。")
-            seat.private_events.append(
-                f"第 {day} 天你被投出去了，但你是白痴：你翻牌活了下来，代价是**以后不能再投票**"
-                f"（发言照常）。只能靠夜里被杀或被毒才会出局。")
-            self.emit("idiot_reveal", seat=seat_id, day=day)
+        self.ledger.add(day, "day", "announce",
+                        f"投票结果：{seat_id}号 得 {score} 票。")
+        # 守墓人的信息来源：**只有真正被投票放逐**的人才算（愚者翻牌免疫的不算）
+        self.last_exiled = seat_id
+        died = self.kill(seat_id, "vote")
+        if not died:
+            # 愚者翻牌免疫：这一轮没有人真的被放逐，不进入遗言/警徽/出局技能链。
+            self.last_exiled = None
             self.check_win()
             return
         self.ledger.add(day, "day", "announce",
                         f"投票结果：{seat_id}号 得 {score} 票，被放逐出局。")
-        # 守墓人的信息来源：**只有真正被投票放逐**的人才算（夜里死的、翻牌活下来的都不算）
-        self.last_exiled = seat_id
-        self.kill(seat_id, "vote")
         # ⚠️ 2026-10-25 修：**遗言必须排在判胜负之前**。
         #    以前这里是 `if seat.role_key != "wolf_king" and self.check_win(): return` ——
         #    于是"这一票正好结束对局"（投出最后一狼 / 最后一张边牌）时被放逐者**拿不到遗言**，
@@ -2607,6 +2605,64 @@ class Game:
             await self.wolf_king_take(seat, where="你被投票放逐了", daytime=True)
         self.check_win()
 
+    async def knight_judge(self, day: int) -> None:
+        """骑士在白天放逐投票前的一次性审判；每局只问一次。"""
+        knight = next((s for s in self.alive if s.role_key == "knight" and not s.knight_used), None)
+        if knight is None:
+            return
+        legal = [i for i in self.alive_ids() if i != knight.id]
+        if not legal:
+            return
+        task = Task(
+            kind="knight_judge",
+            text=(f"第 {day} 天，全部发言已经结束，放逐投票开始之前。"
+                  f"你是【骑士】，本局还有一次「骑士审判」，可以选择是否发动，以及审判谁。\n"
+                  f"· 目标是狼人 → 对方翻牌出局（公示身份）；目标是狼王 → 你和狼王一起出局，狼王不能带人。\n"
+                  f"· 目标是好人 → 只公示对方是好人阵营（不公示具体职业），你不出局，但票权降为 0.5。\n"
+                  f"· 无论结果如何，今天的放逐投票都会照常进行。\n"
+                  f"收益高风险高：没有把握就填 use=false，不要为了用技能而用。"),
+            schema=('{"use": true/false, "target": <玩家编号或 null>, '
+                    '"reason": "<一句话理由>"}'),
+            legal=legal, required=("use",),
+        )
+        reply = await self.act(knight, task)
+        if not truthy(reply.get("use"), default=False):
+            return
+        target_id = self.coerce_seat(reply.get("target"), legal, default=None)
+        if target_id is None:
+            self.ledger.add(day, "day", "announce",
+                            f"{knight.id}号 想发动骑士审判，但没有给出合法目标；本次不发动。")
+            return
+        knight.knight_used = True
+        target = self.seat_by_id(target_id)
+        if target.role_key == "wolf_king":
+            # 2026-11-07 作者口径：骑士撞狼王，两人一起出局；狼王不再带走别人。
+            self.ledger.add(day, "day", "announce",
+                            f"{knight.id}号 翻牌【骑士】，审判 {target_id}号 —— "
+                            f"{target_id}号 是【狼王】，骑士与狼王一起出局；狼王不能带人。")
+            target.king_done = True
+            self.kill(target_id, "knight", reveal=True)
+            self.kill(knight.id, "knight", reveal=True)
+            await self.handle_sheriff_death(target)
+            await self.handle_sheriff_death(knight)
+            self.check_win()
+            return
+        if target.role_key == "wolf":
+            self.ledger.add(day, "day", "announce",
+                            f"{knight.id}号 翻牌【骑士】，审判 {target_id}号 —— "
+                            f"{target_id}号 是【狼人】，翻牌出局。")
+            self.kill(target_id, "knight", reveal=True)
+            await self.handle_sheriff_death(target)
+            self.check_win()
+            return
+        # 审判到好人：只公示阵营，不公示职业；骑士不出局，但票权降为 0.5。
+        knight.knight_failed = True
+        self.ledger.add(day, "day", "announce",
+                        f"{knight.id}号 翻牌【骑士】，审判 {target_id}号 —— "
+                        f"{target_id}号 是好人阵营（不公示具体职业）；"
+                        f"{knight.id}号 是【无能的骑士】，不出局，票权从此降为 0.5 票。")
+        self.check_win()
+
     async def hunter_shoot(self, hunter: Seat, daytime: bool = True) -> None:
         """猎人出局时开枪。
 
@@ -2635,7 +2691,9 @@ class Game:
             self.ledger.add(self.day, "day", "announce",
                             f"{hunter.id}号 亮出猎人身份，开枪带走 {target}号"
                             f"（夜里出局，不公示死因）。")
-        self.kill(target, "hunter")
+        if not self.kill(target, "hunter"):
+            # 愚者翻牌免疫：这一枪没有造成出局，不进入遗言/狼王/警徽链。
+            return
         # 狼王被这一枪带走也算"出局" → 他照样能临死带走一名好人（作者口径：任何原因都能带）。
         # ⚠️ 必须在这句 `check_win()` 之前：被枪打死的可能正是"最后一狼"，
         #    先判胜负就把他那一口吃掉了（§56 的结算次序）。
@@ -2691,7 +2749,8 @@ class Game:
             self.ledger.add(self.day, "day", "announce",
                             f"{lucky.id}号 亮出【幸运儿】身份，开枪带走 {target}号"
                             f"（夜里出局，不公示死因）。")
-        self.kill(target, "lucky")
+        if not self.kill(target, "lucky"):
+            return
         victim_seat = self.seat_by_id(target)
         if victim_seat.role_key == "wolf_king":
             await self.wolf_king_take(victim_seat, where="你被幸运儿开枪带走",
@@ -2783,7 +2842,9 @@ class Game:
         else:
             self.ledger.add(self.day, "day", "announce",
                             f"{king.id}号 亮出【狼王】身份，带走 {target}号（夜里出局，不公示死因）。")
-        self.kill(target, "king")
+        if not self.kill(target, "king"):
+            # 愚者翻牌免疫：没有被带走，不进入遗言/警徽链。
+            return
         # 被带走的人有没有遗言（与 hunter_shoot 同口径）：
         #   · **白天**被带走 → 有遗言（跟"白天那一枪"一样）；
         #   · **第一夜**被带走 → 也算第一夜的死者，照样有遗言（第 2 夜起就没有了）。
@@ -3355,7 +3416,7 @@ class Game:
 
     async def _election_vote_and_elect(self, day: int, candidates: list[int]) -> None:
         """竞选投票 + 平票 PK + 选出警长（原 `sheriff_election` 的后半段，抽出来复用）。"""
-        voters = [s for s in self.alive if s.id not in candidates and not s.revealed_idiot]
+        voters = [s for s in self.alive if s.id not in candidates]
         votes = await self._election_votes(candidates, voters, round_no=1)
         counts = Counter(t for t in votes.values() if t is not None)
         if not counts:
@@ -3539,10 +3600,28 @@ class Game:
     # 出局与胜负
     # ------------------------------------------------------------------ #
 
-    def kill(self, seat_id: int, cause: str, reason: str = "") -> None:
+    def _idiot_reveal(self, seat: Seat, *, cause: str = "") -> None:
+        """愚者第一次受到任何致命结算：翻牌免疫，之后仍可投票（0.5 票）。"""
+        seat.revealed_idiot = True
+        self.ledger.add(self.day, "day", "announce",
+                        f"{seat.id}号 翻开牌亮出【愚者】身份，免疫本次出局；"
+                        f"他仍然可以投票，票权为 0.5 票。")
+        seat.private_events.append(
+            f"第 {self.day} 天你受到致命结算（{CAUSE_TEXT.get(cause, cause)}），"
+            f"翻开【愚者】牌免疫了这次出局；你仍然可以投票，票权 0.5。")
+        self.emit("idiot_reveal", seat=seat.id, day=self.day)
+
+    def kill(self, seat_id: int, cause: str, reason: str = "", reveal: bool = False) -> bool:
+        """让座位出局；返回 True=真的死了，False=愚者翻牌免疫。
+
+        `reveal=True` 只用于骑士审判/特殊公示：立即公开身份牌（暗牌板也公开）。
+        """
         seat = self.seat_by_id(seat_id)
         if not seat.alive:
-            return
+            return False
+        if seat.role_key == "idiot" and not seat.revealed_idiot:
+            self._idiot_reveal(seat, cause=cause)
+            return False
         seat.alive = False
         # ⚠️ 这里**不许**写 `last_exiled`：`kill()` 服务所有死因（夜里被刀/被毒/被枪/被放逐），
         #    而"上一个被放逐的人"只有 `exile()` 知道 —— 见那个函数里的赋值。
@@ -3560,10 +3639,11 @@ class Game:
         # 只亮**身份牌**、照旧不公示死因 —— 所以这条公告和"昨晚出局：X 号（不公布死因）"
         # 不冲突：那条说的是怎么死的，这条说的是他是谁。
         # ⚠️ 放在 `emit("death")` 之前：手机端先看到公告、再刷新座位条。
-        if self.reveal_on_death:
+        if self.reveal_on_death or reveal:
             self.ledger.add(self.day, "day", "announce",
                             f"{seat_id}号 出局，亮明身份：【{role_name(seat.role_key)}】。")
         self.emit("death", seat=seat_id, cause=cause, day=self.day)
+        return True
 
     def good_can_still_kill(self) -> bool:
         """好人手里还有没有"能在夜里弄死狼"的牌（控场判定的另一半）。
@@ -3586,6 +3666,8 @@ class Game:
                 if self.witch_poison:
                     return True
             elif s.role_key in ("hunter", "dreamer"):
+                return True
+            elif s.role_key == "knight" and not s.knight_used:
                 return True
             if s.role_key == "lucky" and (s.lucky_bullet or not s.lucky_used):
                 return True
@@ -3810,7 +3892,9 @@ class Game:
                     "checked": {str(k): v for k, v in s.checked.items()},
                     "death_day": s.death_day, "death_cause": s.death_cause,
                     "last_guard": s.last_guard,
-                    "revealed_idiot": s.revealed_idiot,
+                    "knight_used": s.knight_used,
+            "knight_failed": s.knight_failed,
+            "revealed_idiot": s.revealed_idiot,
                     "lucky_used": s.lucky_used,
                     "lucky_bullet": s.lucky_bullet,
                     # 狼王是否已经用过"带走一人"（复盘要看得出他那一口到底用没用）

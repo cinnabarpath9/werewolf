@@ -37,6 +37,10 @@ def build(state, seat, task: Task) -> str:
 
     identity = [f"【你的身份】{role.name}（{camp_name(role.camp)}）", role.brief]
     parts.append("\n".join(identity))
+    parts.append(
+        "【读法】身份和当前任务优先；中间的规则、打法、概率都是判断材料；"
+        "最后的「当前任务」和「输出格式」两块为准。"
+    )
 
     # ── 通用玩家提示词 + 位置概率参考（2026-10-07 起用，取代按座位的人设卡；
 #    2026-10-09 起概率段并进《概念库》，按阵营分发）──
@@ -206,12 +210,6 @@ def build(state, seat, task: Task) -> str:
         if task_tail:
             parts.append("【当前任务补充（按任务触发）】\n" + task_tail)
 
-    parts.append("【当前任务】" + task.text)
-    if task.legal:
-        parts.append("【可选目标】" + seats_text(task.legal))
-    else:
-        parts.append("【可选目标】无（自由发言）")
-    parts.append("【输出格式】只输出一个 JSON 对象，不要解释、不要代码块标记：\n" + task.schema)
 
     # ── 狼「穿身份」参考章（2026-10-08 新增，**纯附加块**）─────────────────────
     # 用户反馈的真问题：悍跳狼会站在**旁观者**的角度谈自己声称的身份（「真预言家怎么样」
@@ -219,18 +217,17 @@ def build(state, seat, task: Task) -> str:
     # 女巫/猎人**该怎么说话**。
     # 做法：狼**已经报过某个身份**（台账里的 `claim` 条目，由引擎写入 —— 不新增任何引擎
     # 接口、不改台账结构）之后，把**那个身份的章节**也附给它。
-    # ⚠️ **还没报过任何身份的狼，默认附「预言家」章**（`default_seer=True`）：
-    #    "第 1 天悍跳预言家"是狼最主流的打法，而第 1 天不竞选警长的狼**第一次开口时
-    #    必然还没有 claim 台账**（`claim` 就是这次发言的产物）—— 不兜这个默认，
-    #    它最需要演的那一次恰好是空的。理由：第一/第二天能抢的硬身份基本都是预言家；
-    #    跳女巫/猎人/守卫通常发生在后面几轮，那时 claim 已经写进台账、自然就跟着走了。
-    # ⚠️ 放在包的**最后**是有意的：上面每个块的位置都跟原来一模一样（老路径一字未动），
-    #    这一块只是多出来的尾巴；挨着【输出格式】也正好提醒它"这一章是给你这一手发言用的"。
+    # ⚠️ **第一次开口不再整章附「预言家」**：狼章本身已有完整的悍跳预打法；
+    #    整章附预既多花约 8k 字符，又会把狼队推成“只会悍跳预”。现在只给一句
+    #    “身份占位提示”，真要悍跳预就按主包狼章的「悍跳预言家」节打。
+    # ⚠️ 放在【当前任务】之前、任务补充之后：参考章是“演法资料”，
+    #    不是这一手的指令。当前任务和输出格式必须留在**包的最末尾**，
+    #    否则模型最后读到的是参考章，格式/任务指令会被压掉。
     # 只对狼生效：好人的身份是真的，给它别的角色章节没有意义、还会污染视角。
     # 开关 `game.attach_claimed_chapter`（config.yaml，默认开）关掉就整块不附 ——
     # 用户在意延迟与成本，这是那个闸。
     if role.camp == "wolf" and book and attach_claimed_chapter():
-        claimed = claimed_role_key(state, seat.id, default_seer=True)
+        claimed = claimed_role_key(state, seat.id, default_seer=False)
         # ⚠️ P3-3：它声称的就是**自己真正的角色**（狼人说「我是狼人/狼」）时**不附**。
         #    那种情况下被附上来的那一章跟它主包里已有的狼章是同一段文字 ——
         #    实测一份包里同一章进了两遍、多出 6294 字（既白烧 token，又让模型读成两份书）。
@@ -239,6 +236,7 @@ def build(state, seat, task: Task) -> str:
         #    `ROLE_EXTRA_FRAGS` 让它的主包已经带了 `role:wolf`；他报「我是狼人」时
         #    claimed="wolf" != "wolf_king"，旧判据照样把狼人章附第二遍（14527 字×每调用）。
         own_frags = {seat.role_key} | set(tabletalk.ROLE_EXTRA_FRAGS.get(seat.role_key, ()))
+        extra = ""
         if claimed and claimed not in own_frags:
             extra = tabletalk.playbook_block(
                 # ⚠️ 用 filter_role_only 而不是 filter_role：通用部分（frag:all）它自己的包里
@@ -252,8 +250,24 @@ def build(state, seat, task: Task) -> str:
                     #    抬头**如实转述它报的原文**，不能说"你还没报过身份"——
                     #    引擎已经写了公开的 claim 条目，那句"还没报"跟同一份包自相矛盾。
                     raw=_raw_claim_of(state, seat.id) if not _claim_of(state, seat.id) else ""))
-            if extra:
-                parts.append(extra)
+        if extra:
+            parts.append(extra)
+        elif _has_claim(state, seat.id) and not _claim_of(state, seat.id):
+            # 报过、但别名表认不出：只如实记原文，不再整章附预言家。
+            raw = _raw_claim_of(state, seat.id)
+            if raw:
+                parts.append(
+                    f"【你报的身份：{raw}】\n"
+                    "你已经在场上报过这个说法，但它不在身份别名表里；引擎不会替你附角色章。"
+                    "后面按你自己报的口径保持自洽，别改口。"
+                )
+        elif not _has_claim(state, seat.id):
+            # 第一次开口不再整章附预言家：狼章本身已有“悍跳预言家”的完整打法，
+            # 默认整章附预既贵，又会把狼队推成“只会悍跳预”。
+            parts.append(
+                "【身份占位提示】你这一轮还没报身份。要悍跳预，按上面狼章的「悍跳预言家」节打；"
+                "也可以按“非预身份位”表占守墓/摄梦/无毒巫/养鸦/愚者。不要默认只跳预。"
+            )
 
     # ── 幸运儿的技能参考章（2026-11-07，纯附加块）─────────────────────────
     # 幸运儿选“守护”时要会守人；选“子弹”时要会开枪。把守卫/猎人的角色章
@@ -273,6 +287,15 @@ def build(state, seat, task: Task) -> str:
                              "你的子弹和猎人的枪同一套口径：被放逐或被狼刀可以开枪；"
                              "被毒死/被梦死不能开枪；开了就消耗。\n"
                              + hunter_text)
+
+    # 当前任务/输出格式必须放在最后：模型对“最后读到的指令”权重最高；
+    # 参考章（穿身份、幸运儿技能）只在这之前提供资料，不抢任务与 JSON 格式。
+    parts.append("【当前任务】" + task.text)
+    if task.legal:
+        parts.append("【可选目标】" + seats_text(task.legal))
+    else:
+        parts.append("【可选目标】无（自由发言）")
+    parts.append("【输出格式】只输出一个 JSON 对象，不要解释、不要代码块标记：\n" + task.schema)
 
     return "\n\n".join(parts)
 
@@ -295,6 +318,7 @@ _CLAIM_ALIASES: dict[str, str] = {
     "守墓人": "gravekeeper", "守墓": "gravekeeper", "gravekeeper": "gravekeeper",
     "养鸦人": "crow", "乌鸦": "crow", "鸦": "crow", "crow": "crow",
     "幸运儿": "lucky", "幸运": "lucky", "lucky": "lucky",
+    "骑士": "knight", "knight": "knight",
     "村民": "villager", "民": "villager", "平民": "villager", "villager": "villager",
     "狼人": "wolf", "狼": "wolf", "wolf": "wolf",
     # 2026-10-10（狼王版板子）：狼王是狼队角色，但他**不是 wolf** ——

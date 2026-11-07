@@ -132,7 +132,7 @@ async def main() -> int:
                         help="打印该座位某一次决策时看到的完整上下文，可重复")
     parser.add_argument("--seed", type=int, default=None, help="固定随机种子，可复现同一局")
     parser.add_argument("--board", default=None,
-                        help="板子名：默认取 config.yaml 的 game.board（现在是 eleven_wolfking），"
+                        help="板子名：默认取 config.yaml 的 game.board（现在是 eleven_knight），"
                              "也可以点 twelve_standard/nine_all/six_all_reveal，或 config 里自定义的")
     parser.add_argument("--list-boards", action="store_true", help="列出所有可用的板子然后退出")
     parser.add_argument("--routing", action="store_true", help="只打印座位路由然后退出")
@@ -149,7 +149,7 @@ async def main() -> int:
     #    必须在这里调到，否则 `run_game.py --config /tmp/x.yaml` 读的开关跟实际配置不是一份。
     context.set_config_path(args.config)
 
-    board_name = args.board or game_cfg.get("board") or "eleven_wolfking"
+    board_name = args.board or game_cfg.get("board") or "eleven_knight"
     try:
         board_def = make_board(str(board_name), game_cfg.get("boards"))
     except KeyError as exc:
@@ -281,6 +281,8 @@ async def main() -> int:
     if args.list_boards:
         print("内置板子：")
         for key, item in BUILTIN_BOARDS.items():
+            if not getattr(item, "visible", True):
+                continue
             mark = "←当前" if key == board_def.name else ""
             print(f"  {key:<14} {board_summary(item)} {mark}")
         custom = game_cfg.get("boards") or {}

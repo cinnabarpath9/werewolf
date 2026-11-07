@@ -87,6 +87,14 @@ class MockAgent(BaseAgent):
         if kind == "wolf_explode":
             # 自爆：mock 一律**不爆**（保持 mock 局轨迹与调用次数稳定；自爆由剧本回归覆盖）
             return {"explode": False, "who": None, "reason": "还不至于，先看看"}
+        if kind == "knight_judge":
+            use = await self._input("骑士审判：现在发动吗？(y/N)：")
+            if not truthy(use, default=False):
+                return {"use": False, "reason": "人类玩家选择不发动"}
+            tgt = await self._input(f"审判谁？{hint}：")
+            if not tgt.strip().isdigit() or int(tgt) not in legal:
+                return {"use": False, "reason": "目标不合法，不发动"}
+            return {"use": True, "target": int(tgt), "reason": "人类玩家自己决定"}
         if kind == "dream":
             # 摄梦人（本项目默认板子）：mock 走"盲梦"——在合法目标里随机挑一个。
             # 真实模型按攻略的"保护/举刀/刺杀/连狼"四式选，mock 只需把规则链路跑通。
@@ -117,6 +125,9 @@ class MockAgent(BaseAgent):
             return {"shoot": None, "reason": "不确认，先不开枪"}
         if kind == "lucky_shoot":
             return {"shoot": None, "reason": "不确认，先不开枪"}
+        if kind == "knight_judge":
+            # mock 默认不发动（骑士审判是高风险管理手；剧本回归会显式开技能）。
+            return {"use": False, "reason": "mock 不冒险"}
         if kind == "wolf_king_take":
             # 狼王出局时"带走谁"（新板子 `eleven_wolfking`）。mock 走**随机带走一个好人**：
             # 这条链路（带人 → 判屠边）必须真的被跑到，否则 mock/回归局里狼王等于白板。
