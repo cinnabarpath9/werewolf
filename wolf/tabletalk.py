@@ -26,6 +26,8 @@ DEFAULT_META_PATH = "content/06_概念库.md"
 DEFAULT_PLAYBOOK_PATH = "content/05_战术书.md"
 #: 角色章单独一份（2026-10-31 拆书）：默认路径 = 战术书 + 角色书，拼起来才是完整的"打法书"
 DEFAULT_PLAYBOOK_EXTRA = "content/04_角色书.md"
+#: 技能打法片段（Phase 2）：只发本局 active_skills 的 `frag:skill:<key>`。
+DEFAULT_SKILL_BOOK = "content/08_技能书.md"
 DEFAULT_PLAYER_PROMPT = (
     "你是一名专业的狼人杀玩家。请根据本局发给你的身份牌进行发言和决策，"
     "你的发言和决策要尽可能让你所在阵营获得优势，并最终取得胜利。"
@@ -55,6 +57,9 @@ def load_playbook(project_root: str, path: str = "", role_key: str = "",
         extra = _read(os.path.join(project_root, DEFAULT_PLAYBOOK_EXTRA))
         if extra:
             text = text + "\r\n" + extra
+        skill_book = _read(os.path.join(project_root, DEFAULT_SKILL_BOOK))
+        if skill_book:
+            text = text + "\r\n" + skill_book
     if not text:
         return ""
     if role_key or camp:
@@ -84,7 +89,8 @@ PHASE_ORDER = {"open": 0, "mid": 1, "late": 2}
 #: ⚠️ 这份继承**只影响主包**（`_filter_role`）：狼"穿身份"附参考章走 `filter_role_only`，
 #: 那里把"不是你这个角色的章"整段丢掉 —— 否则小狼报一句「我是狼王」就会被附上整整一章狼人，
 #: 而那一章他主包里早就有（实测过：同一章进两遍既烧 token、又会被读成两份互相冲突的书）。
-ROLE_EXTRA_FRAGS: dict[str, tuple[str, ...]] = {"wolf_king": ("wolf",)}
+ROLE_EXTRA_FRAGS: dict[str, tuple[str, ...]] = {"wolf_king": ("wolf",),
+                                               "wolf_witch": ("wolf",)}
 
 
 def _role_frag_keys(role_key: str) -> set[str]:
@@ -218,7 +224,8 @@ def _filter_part(text: str, phase: str) -> str:
 
 
 def _filter_role(text: str, role_key: str, camp: str = "", phase: str = "",
-                 triggers: set[str] | None = None, keep_when: bool = False) -> str:
+                 triggers: set[str] | None = None, keep_when: bool = False,
+                 skills: set[str] | None = None) -> str:
     """按角色 + 阵营 + 阶段 + 事件过滤。
 
     角色/阵营标记：`<!-- frag:all -->`、`frag:camp:xx`、`frag:role:xx`、`frag:god`。
@@ -240,6 +247,8 @@ def _filter_role(text: str, role_key: str, camp: str = "", phase: str = "",
     # 先按"阶段"把不该看的小节整块去掉（没传 phase 就什么都不动）
     if phase:
         text = _filter_part(text, phase)
+    skill_set = set(skills or ())
+    skill_filter = skills is not None
     out: list[str] = []
     keep = True
     #: 条件块可能嵌套（例如 `day_speech` 里再套 `front_seer_claim`）。
@@ -262,7 +271,8 @@ def _filter_role(text: str, role_key: str, camp: str = "", phase: str = "",
             continue
         # ⚠️ `part:*` / `endpart` 也要认：不带 phase 时 `_filter_part` 原样返回，
         #    这些标记行必须在这里被消费掉，否则会漏成可见文字进包（t_playbook 1i 就查这个）。
-        marker = re.match(r"\s*<!--\s*frag:(all|god|role:[a-z_]+|camp:(?:wolf|good)|wolf|good|end"
+        marker = re.match(r"\s*<!--\s*frag:(all|god|role:[a-z_]+|skill:[a-z_]+|"
+                          r"camp:(?:wolf|good)|wolf|good|end"
                           r"|part:(?:open|mid|late)|endpart)\s*-->\s*$", line)
         if marker:
             what = marker.group(1)
@@ -270,6 +280,8 @@ def _filter_role(text: str, role_key: str, camp: str = "", phase: str = "",
                 continue                      # 阶段标记：什么都不改（该发的正文照发）
             if what in ("end", "all"):
                 keep = True
+            elif what.startswith("skill:"):
+                keep = (not skill_filter) or (what.split(":", 1)[1] in skill_set)
             elif what == "god":
                 keep = bool(is_god)
             elif what.startswith("camp:") or what in ("wolf", "good"):
@@ -420,9 +432,9 @@ def filter_camp(text: str, camp: str) -> str:
 
 
 def filter_role(text: str, role_key: str, camp: str = "", phase: str = "",
-                triggers: set[str] | None = None) -> str:
-    """公开别名：给 context.build 用（按角色 + 阵营 + 阶段 + 事件过滤）。"""
-    return _filter_role(text, role_key, camp, phase, triggers)
+                triggers: set[str] | None = None, skills: set[str] | None = None) -> str:
+    """公开别名：给 context.build 用（按角色 + 阵营 + 阶段 + 事件 + 技能过滤）。"""
+    return _filter_role(text, role_key, camp, phase, triggers, skills=skills)
 
 
 def filter_role_only(text: str, role_key: str, phase: str = "") -> str:
@@ -609,6 +621,6 @@ def lint_meta_book(text: str) -> list[str]:
     hay = persona_mod._norm_for_match(text)
     bad = [w for w in ("我是狼", "我是预言家", "我是女巫", "我是猎人", "我的身份是",
                    "我是愚者", "我是白痴", "我是摄梦人", "我是守墓人", "我是养鸦人", "我是幸运儿", "我是骑士",
-                   "我是狼王")
+                   "我是狼王", "我是狼巫")
            if persona_mod._norm_for_match(w) in hay]
     return [f"概念库（进包段落）里出现了第一人称身份声明：{('、'.join(bad))}"] if bad else []

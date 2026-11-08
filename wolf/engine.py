@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import itertools
 import json
+import inspect
 import math
 import os
 import random
@@ -25,6 +26,7 @@ from .context import Task
 from .ledger import WOLF, Ledger
 from .roles import (ROLES, WOLF as WOLF_CAMP, BoardDef, make_board, role_name,
                     seats_text, validate_board)
+from .skills import EVENT_ORDER, ROLE_DEATH_SKILL, SKILLS, SKILL_METHODS, active_skills
 
 #: 死因只在私有视角里出现，公开记录里**不写**（标准规则：夜里死亡不公布死因，让场上好人自己猜）。
 #: ⚠️ 唯一的例外是**白天**那一枪：按用户定的规则，白天被猎人打死的人死因公示为"被子弹打死"，
@@ -320,6 +322,8 @@ class Seat:
     #: 每条路径都要在"判胜负之前"给他一次带人机会 —— 没有这个闸，一条路径补了、
     #: 另一条路径忘了补就会**静默吞掉他的技能**（或者反过来重复触发）。
     king_done: bool = False                                 # 狼王：已经用过"带走一人"
+    #: 狼巫诅咒：等于被诅咒的**夜次/天次**；本夜和当天技能失效，次日夜恢复。
+    cursed_day: int | None = None
     death_day: int | None = None
     death_cause: str | None = None
     agent: object = None
@@ -393,6 +397,9 @@ class Game:
         self.rng.shuffle(keys)
         self.board = self.board_def.name
         self.win_rule = self.board_def.win_rule
+        #: 技能库 Phase 0：本局激活的技能（由本局角色编译，不是全局技能表）。
+        #: 现在只做元数据/审计/测试；真正结算仍在各旧分支，Phase 1 才改为按它调度。
+        self.active_skills: tuple[str, ...] = active_skills(self.board_def)
         #: 2026-10-31 联机：真人可以坐**多个**座位。`human_seat` 保留为旧入口（单人局），
         #: `human_seats` 是联机局里实际被玩家占用的座位集合。
         #: ⚠️ 引擎里所有 `is_human` 分支（跳过决策层、投票单独问、不做自动兜底）都靠它。
@@ -547,7 +554,8 @@ class Game:
                                         win_rule=self.win_rule,
                                         # 锁定上警是**开局选项**（不是板子属性）：关掉时
                                         # 规则里那句「不问你」必须一起消失，否则模型会以为自己没被问
-                                        seer_auto_run=self.seer_auto_run) or ""
+                                        seer_auto_run=self.seer_auto_run,
+                                        skills=self.active_skills) or ""
         self.agent_factory = agent_factory
         #: 每次模型调用的完整留痕（复盘用）：看到了什么、回了什么、推理链、用量、耗时
         self.transcript: list[dict] = []
@@ -576,6 +584,97 @@ class Game:
 
     def alive_ids(self) -> list[int]:
         return [s.id for s in self.alive]
+
+    def skill_enabled(self, key: str) -> bool:
+        """本局板子是否编译出了这个技能。"""
+        return str(key) in self.active_skills
+
+    def ordered_skills(self) -> tuple[str, ...]:
+        """本局技能顺序（Phase 0/1a 供调度/审计；night() 仍按旧顺序跑）。"""
+        return tuple(self.active_skills)
+
+    def skills_for_phase(self, phase: str) -> tuple[str, ...]:
+        """本局在某个阶段真正可调度的技能，按 active_skills 顺序。"""
+        return tuple(k for k in self.ordered_skills()
+                     if SKILLS.get(k) and SKILLS[k].phase == phase)
+
+    def skills_for_event(self, event: str) -> tuple[str, ...]:
+        """本局在某个显式事件槽里的技能，按 EVENT_ORDER 排序。"""
+        active = [k for k in self.ordered_skills()
+                  if SKILLS.get(k) and SKILLS[k].event == event]
+        # 板子显式声明了 skill_order：完全按板子顺序（rest 已在 active_skills 尾部）。
+        if tuple(getattr(self.board_def, "skill_order", ()) or ()):
+            return tuple(active)
+        # 未声明的板子：使用显式事件顺序表，未知技能按 SkillDef.order 追加。
+        declared = [k for k in EVENT_ORDER.get(event, ()) if k in active]
+        rest = sorted((k for k in active if k not in declared),
+                      key=lambda k: (SKILLS[k].order, k))
+        return tuple(declared + rest)
+
+    def death_skill_for(self, seat: Seat | None) -> str | None:
+        """Phase 1f：某张牌出局时，本局事件表里该触发的死亡技能。"""
+        if seat is None:
+            return None
+        key = ROLE_DEATH_SKILL.get(seat.role_key)
+        return key if key in self.skills_for_event("on_death") else None
+
+    async def run_death_skills(self, seat: Seat, *, daytime: bool, where: str,
+                               cause: str | None = None, prefetched=None) -> None:
+        """Phase 1h：按 on_death 事件表执行该牌出局时的死亡技能。
+
+        只处理真的属于这张牌的技能；顺序由 EVENT_ORDER["on_death"] 决定。
+        """
+        for key in self.skills_for_event("on_death"):
+            if ROLE_DEATH_SKILL.get(seat.role_key) != key:
+                continue
+            if key == "hunter_shoot":
+                await self.run_skill_async("hunter_shoot", seat, daytime=daytime)
+            elif key == "lucky_bullet":
+                await self.run_skill_async("lucky_bullet", seat, daytime=daytime)
+            elif key == "wolf_king_take":
+                await self.run_skill_async("wolf_king_take", seat, where=where,
+                                            daytime=daytime, prefetched=prefetched)
+
+    async def run_skill_async(self, key: str, *args, **kwargs):
+        """Phase 1b 试点调度：只有本局激活且登记了真实方法的技能才执行。
+
+        返回值：handler 的返回值；技能未激活/未迁移则返回 None。
+        这只包住已迁移的试点技能；night() 的旧顺序尚未整体重排。
+        """
+        if not self.skill_enabled(key):
+            return None
+        method_name = SKILL_METHODS.get(str(key))
+        if not method_name:
+            return None
+        method = getattr(self, method_name, None)
+        if method is None:
+            return None
+        result = method(*args, **kwargs)
+        if inspect.isawaitable(result):
+            return await result
+        return result
+
+    def is_cursed(self, seat: Seat | None, day: int | None = None) -> bool:
+        """狼巫诅咒是否覆盖当前这个夜/白天。"""
+        if seat is None:
+            return False
+        return getattr(seat, "cursed_day", None) == (self.day if day is None else day)
+
+    def skill_gate(self, seat: Seat | None, skill: str, day: int | None = None,
+                   phase: str = "") -> str | None:
+        """所有主动/被动技能的统一失效闸门。
+
+        目前只有狼巫诅咒一种失效来源；以后加沉默/封印/技能封锁，只改这里，
+        不要在验人/开药/摄梦/守墓/骑士/鸦/愚者/狼王的每条分支各写一遍判断。
+        返回 None = 可用；返回字符串 = 不可用原因（调用方原样写私有记录）。
+        """
+        if seat is None:
+            return None
+        if self.is_cursed(seat, day):
+            where = "本夜" if (phase or self.phase) == "night" else "本日"
+            return (f"你被狼巫诅咒：{where}【{skill}】失效。"
+                    f"（诅咒覆盖本夜+次日，不会补发）")
+        return None
 
     def dead_list(self) -> list[tuple[int, str]]:
         """公开的死讯：只说谁在第几天出局，不说死因。
@@ -925,26 +1024,34 @@ class Game:
         decided: dict[int, dict] = {}
 
         async def one_decide(wolf: Seat) -> tuple[Seat, dict]:
+            witch_here = (wolf.role_key == "wolf_witch" and day >= 2
+                          and self.skill_enabled("wolf_curse"))
+            curse_hint = ""
+            if witch_here:
+                curse_hint = ("\n⚠️ 你是【狼巫】：这一轮先把 `curse` 写成你要诅咒的玩家编号（可以填 null 不用），"
+                              "再写 `target` 要刀谁。诅咒封的是目标**本夜和次日**的技能，不封它的发言/投票；"
+                              "狼刀和诅咒可以打同一张，也可以分开。优先想清楚：封技能和拿人头哪边收益更大。")
             task = Task(
                 kind="wolf_intent",
                 text=(f"第 {day} 天夜晚，狼人行动。**还没开始讨论**，先做一次完整分析"
                       f"（只有你自己看得到）：\n"
                       f"1) 逐个点评场上活着的玩家（{ '、'.join(f'{i}号' for i in targets) }）："
                       f"谁像神职、谁像村民、谁最该今晚被刀（刀谁收益最大 / 最能掩盖你们身份）？\n"
-                      f"2) 定下你今晚要刀谁。\n"
+                      f"2) 定下你今晚要刀谁。"
+                      f"{curse_hint}\n"
                       f"⚠️ 目标里**包含你们自己人（狼）**：自刀或刀队友是标准战术 ——"
                       f"做身份、骗女巫的解药、抢轮次都可能用得上；用不用、用在哪，由你判断。"),
-                schema=('{"reads": [{"seat": <编号>, "role": "<猜的身份>", "why": "<一句>"}], '
-                        '"summary": "<两三句局势判断>", '
-                        '"target": <你要刀的玩家编号>, "reason": "<一两句真实理由>"}'),
+                schema=(('{"reads": [{"seat": <编号>, "role": "<猜的身份>", "why": "<一句>"}], '
+                         '"summary": "<两三句局势判断>", '
+                         '"curse": <你要诅咒的玩家编号或 null>, '
+                         '"target": <你要刀的玩家编号>, "reason": "<一两句真实理由>"}')
+                        if witch_here else
+                        ('{"reads": [{"seat": <编号>, "role": "<猜的身份>", "why": "<一句>"}], '
+                         '"summary": "<两三句局势判断>", '
+                         '"target": <你要刀的玩家编号>, "reason": "<一两句真实理由>"}')),
                 legal=targets, required=("target",),
-                #: `good` = 只给代理看的"好人名单"：**随机代理（MockAgent）用它避开自刀**
-                #: （自刀是刻意战术，不该是随机默认值）。真人与模型不受影响 ——
-                #: 它们看的是 legal，里面照样有狼、能点自己人。
-                #: ⚠️ 这里必须**自己算**：它是 `decide_wolf_round` 的局部量，
-                #:    早先写成 `night()` 里的 `good_alive` → NameError → 被下面那句
-                #:    `gather(..., return_exceptions=True)` 静默吞掉，表现为"狼队这轮没决策"。
-                extra={"good": [s.id for s in self.alive if s.camp != WOLF_CAMP]},
+                extra={"good": [s.id for s in self.alive if s.camp != WOLF_CAMP],
+                       **({"curse_legal": targets} if witch_here else {})},
             )
             return wolf, await self.act(wolf, task)
 
@@ -961,13 +1068,49 @@ class Game:
                 continue
             wolf, reply = item
             target = self.coerce_seat(reply.get("target"), targets, default=None)
-            decided[wolf.id] = {"target": target,
+            curse = None
+            if (wolf.role_key == "wolf_witch" and day >= 2
+                    and self.skill_enabled("wolf_curse")):
+                curse = self.coerce_seat(reply.get("curse"), targets, default=None)
+            decided[wolf.id] = {"target": target, "curse": curse,
                                 "reason": str(reply.get("reason") or "").strip()[:200]}
             summary = str(reply.get("summary") or "").strip()
             if summary:
                 wolf.mind = self._append_mind(wolf.mind, f"第 {day} 夜狼队判断：{summary[:160]}")
         self.wolf_decisions = decided
         return decided
+
+    def _apply_wolf_curse(self, day: int, decided: dict[int, dict]) -> None:
+        """把狼巫的诅咒落到目标身上；诅咒只进私有记录，不公开。"""
+        if not self.skill_enabled("wolf_curse"):
+            return
+        witch = next((s for s in self.alive if s.role_key == "wolf_witch"), None)
+        if witch is None or not witch.alive:
+            return
+        rec = decided.get(witch.id) or {}
+        curse_id = rec.get("curse")
+        if not curse_id:
+            witch.private_events.append(f"第 {day} 夜：你今晚没有诅咒任何人。")
+            return
+        self._apply_curse_target(day, witch, curse_id)
+
+    def _apply_curse_target(self, day: int, witch: Seat, curse_id) -> None:
+        """把一个有效的狼巫诅咒落到目标身上（AI 决策轮和真人狼巫共用）。"""
+        target = self.seat_by_id(int(curse_id))
+        if not target or not target.alive:
+            witch.private_events.append(f"第 {day} 夜：诅咒目标不合法，今晚没有诅咒。")
+            return
+        target.cursed_day = day
+        target.private_events.append(
+            f"第 {day} 夜：你被狼巫诅咒了 —— 本夜和第 {day} 天你的技能失效；"
+            f"诅咒不会公开，也不影响你的发言和投票。")
+        witch.private_events.append(f"第 {day} 夜：你诅咒了 {target.id}号（本夜+次日技能失效）。")
+        self.ledger.add(day, "night", "private",
+                        f"你被狼巫诅咒：本夜和第 {day} 天技能失效（不补发）。",
+                        seat=target.id, visible_to=(f"seat:{target.id}",))
+        self.audit.append({"day": day, "phase": "night", "seat": witch.id,
+                           "kind": "wolf_curse", "target": target.id,
+                           "reason": f"wolf_witch curse {target.id}"})
 
     async def _seer_check(self, day: int) -> None:
         """预言家的那一夜验人（**每一次夜晚都会跑**，含"首夜无刀"的板子）。
@@ -978,6 +1121,13 @@ class Game:
         """
         seer = next((s for s in self.alive if s.role_key == "seer"), None)
         if not seer:
+            return
+        blocked = self.skill_gate(seer, "预言家查验", day, "night")
+        if blocked:
+            seer.private_events.append(f"第 {day} 夜：{blocked}")
+            self.ledger.add(day, "night", "private",
+                            f"你被狼巫诅咒，本夜无法查验（没有验人结果）。",
+                            seat=seer.id, visible_to=(f"seat:{seer.id}",))
             return
         unchecked = [i for i in self.alive_ids() if i not in seer.checked and i != seer.id]
         legal = unchecked or [i for i in self.alive_ids() if i != seer.id]
@@ -1061,12 +1211,294 @@ class Game:
                   guarded=None, deaths=[])
         return []
 
-    async def night(self) -> list[tuple[int, str]]:
-        day = self.day
-        # ⚠️ 首夜无刀（作者 2026-10-10）：整夜只跑预言家一次验人，其余夜间角色零调用。
-        #    必须是**这个位置**（在任何狼队决策之前）—— 见 `_quiet_first_night` 的说明。
-        if self.first_night_quiet and day == 1:
-            return await self._quiet_first_night(day)
+    async def _night_guard(self, day: int) -> int | None:
+        """Phase 1c：守卫的夜间守护；返回今晚守的人或 None。"""
+        # --- 守卫 ---
+        guard_target: int | None = None
+        guard = next((s for s in self.alive if s.role_key == "guard"), None)
+        blocked = self.skill_gate(guard, "守卫守护", day, "night") if guard else None
+        if blocked:
+            guard.private_events.append(f"第 {day} 夜：{blocked}")
+            self.ledger.add(day, "night", "private",
+                            "你被狼巫诅咒，本夜无法守护。", seat=guard.id,
+                            visible_to=(f"seat:{guard.id}",))
+            guard = None
+        if guard:
+            legal = [i for i in self.alive_ids() if i != guard.last_guard]
+            if not legal:
+                # 候选为空 = 只剩守卫自己、而昨晚守的正是自己。
+                # 不能退回"谁都能守"——那等于允许连守同一人（规则就被绕过去了），今晚空过。
+                guard.private_events.append(
+                    f"第 {day} 夜：没有可守护的目标（不能连守同一人），你今晚没有行动。")
+            else:
+                task = Task(kind="guard",
+                            text=("夜晚，你使用守卫技能守护一名玩家（不能连续两晚守同一个人，"
+                                  "可以守自己）；**也可以选择今晚不守**（`abstain` 填 true，"
+                                  "等于这一夜空过）。顺便写一句你对场上的判断（谁像狼、你在防谁），"
+                                  "这部分别人看不到。"),
+                            schema=('{"reads": [{"seat": <编号>, "camp": "wolf|good", '
+                                    '"why": "<一句>"}], "summary": "<一句判断>", '
+                                    '"abstain": true/false, "target": <玩家编号>, "reason": "<一句话>"}'),
+                            # ⚠️ `target` 不能进 required：选了弃守就没有 target。
+                            legal=legal, required=())
+                reply = await self.act(guard, task)
+                # 2026-10-25（作者口径）：**守卫可以放弃守护** —— 这是一个正式选项，
+                # 不是死代码（第一版只有代码分支、schema 里没有 abstain，等于没法表达；
+                # 现在 schema / 文案 / required 三处都放开了）。
+                if truthy(reply.get("abstain"), default=False):
+                    guard_target = None
+                    # ⚠️ 2026-10-31 外部审查 P1-07：弃守必须清掉"上一晚守过谁"。
+                    #    以前不清 —— 守卫「第 1 夜守 X → 第 2 夜空过 → 第 3 夜想守 X」
+                    #    会被当成"连守两晚"直接拒绝（候选因此为空时整夜静默不守）。
+                    #    摄梦人那两条同类分支（1136/1150）早就是清 `last_dream` 的写法。
+                    guard.last_guard = None
+                    guard.private_events.append(f"第 {day} 夜：你放弃了守护（今晚没人被守）。")
+                    self.ledger.add(day, "night", "private", "你今晚没有守护任何人（空过）。",
+                                    seat=guard.id, visible_to=(f"seat:{guard.id}",))
+                else:
+                    guard_target = self.coerce_seat(reply.get("target"), legal, default=None)
+                    if guard_target is None:
+                        # 写了目标但压不出来（乱码 / 写了个不合法的人）：如实说"没守成"，
+                        # 不替他随机挑一个 —— 守错人是会影响胜负的一手。
+                        guard.last_guard = None      # 空过的一夜不算链条的一环（同上）
+                        guard.private_events.append(
+                            f"第 {day} 夜：你没给出可守护的目标，今晚按「没有守护」处理。")
+                    else:
+                        guard.last_guard = guard_target
+                        guard.private_events.append(f"第 {day} 夜：你守护了 {guard_target}号。")
+
+        return guard_target
+
+    async def _night_dream(self, day: int) -> tuple[int | None, int | None, Seat | None]:
+        """Phase 1c：摄梦人的夜间摄梦；返回 (目标, 上一夜目标, 摄梦人)。"""
+        # --- 摄梦人（2026-10-09 新增；本项目默认板子用它顶替守卫）---
+        # 本项目：每晚可选梦游者（允许空过）；梦游者免疫夜间伤害；
+        #         摄梦人夜里死亡不再带走梦游者（2026-10-10 取消连死）；**连续两晚**成为梦游者也会死。
+        # 用户附加：**摄梦对象 + 解药 = 奶穿**（照样死，见下面结算）。
+        dreamer_target: int | None = None
+        dream_prev: int | None = None
+        dreamer = next((s for s in self.alive if s.role_key == "dreamer"), None)
+        blocked = self.skill_gate(dreamer, "摄梦人摄梦", day, "night") if dreamer else None
+        if blocked:
+            dreamer.private_events.append(f"第 {day} 夜：{blocked}")
+            self.ledger.add(day, "night", "private",
+                            "你被狼巫诅咒，本夜无法摄梦。", seat=dreamer.id,
+                            visible_to=(f"seat:{dreamer.id}",))
+        elif dreamer:
+            dream_prev = dreamer.last_dream          # 上一夜摄的是谁（判"连续两晚"用）
+            legal = list(self.alive_ids())          # 可以摄自己；没有"不能连摄"的限制
+            # ⚠️ 文案里**必须**带"第 N 夜"与"你上一夜摄的是谁"：
+            #    · 连续两晚摄同一人 = 那个人今晚会死 —— 不知道上一夜摄了谁就没法做这个决定；
+            #    · 实测（写这个功能时）我自己的回归脚本就是靠"第 N 夜"解析夜次的，
+            #      文案里没有夜次时脚本会把第 2 夜当成第 1 夜（假绿/假红的经典来源）。
+            _prev = f"你上一夜摄的是 {dream_prev}号（**今夜再摄他，他就会死**）。" if dream_prev else "这是第一夜，你还没有摄过任何人。"
+            task = Task(kind="dream",
+                        text=(f"第 {day} 夜，你使用摄梦人技能，**可以**选一名玩家成为梦游者"
+                              f"（可以摄自己，**也可以选择今晚空过/不摄**）。{_prev}"
+                              f"梦游者免疫夜间伤害，但他不知道自己在梦游；"
+                              f"你出局**不会**带走他（2026-10-10 起取消「连死」，跟守卫一样）。"
+                              f"顺便写一句你对场上的判断（谁像狼、你在防谁），别人看不到。"),
+                        schema=('{"reads": [{"seat": <编号>, "camp": "wolf|good", '
+                                '"why": "<一句>"}], "summary": "<一句判断>", '
+                                '"target": <玩家编号>, "reason": "<一句话>"}'),
+                        legal=legal, required=("target",))
+            reply = await self.act(dreamer, task)
+            # ⚠️ 用户改定：**允许摄梦人空过**（官方是"必须选"，本项目改成可以不发动）。
+            #    空过时把 last_dream 清掉 —— 否则"空过的那一夜"会被当成链条的一环，
+            #    下一夜再摄同一个人会被误判成"连续两晚"。
+            if truthy(reply.get("abstain"), default=False):
+                dreamer.last_dream = None
+                dreamer.private_events.append(f"第 {day} 夜：你今晚没有摄梦（空过）。")
+                self.ledger.add(day, "night", "private", "你今晚没有摄梦（空过）。",
+                                seat=dreamer.id, visible_to=(f"seat:{dreamer.id}",))
+                dreamer_target = None
+            else:
+                # ⚠️ 2026-10-30 修：**不替他随机挑人**。以前这里没传 default，
+                #    回复乱码/调用失败时会随机摄一个活人；万一随机撞上 `last_dream`，
+                #    还会被判成"连摄两晚"直接弄死他 —— 与守卫分支（"不随机，按没守成处理"）
+                #    是同一类纪律：摄错人会影响胜负。
+                dreamer_target = self.coerce_seat(reply.get("target"), legal, default=None)
+                if dreamer_target is None:
+                    # 没摄成 = 今夜空过：`last_dream` 必须清掉，否则下一夜会被当成
+                    # "连续两晚"链条的一环（同上面 abstain 分支的理由）。
+                    dreamer.last_dream = None
+                    dreamer.private_events.append(
+                        f"第 {day} 夜：你没给出可摄的目标，今晚按「没有摄梦」处理。")
+                    self.ledger.add(day, "night", "private",
+                                    "你今晚没有摄梦（没有给出可用的目标）。",
+                                    seat=dreamer.id, visible_to=(f"seat:{dreamer.id}",))
+                else:
+                    dreamer.last_dream = dreamer_target
+                    # 只让他自己知道结果；梦游者本人**不会**收到任何提示（官方：他不知道自己梦游）
+                    dreamer.private_events.append(f"第 {day} 夜：你摄梦了 {dreamer_target}号。")
+                    self.ledger.add(day, "night", "private",
+                                    f"你摄梦了 {dreamer_target}号。",
+                                    seat=dreamer.id, visible_to=(f"seat:{dreamer.id}",))
+
+        return dreamer_target, dream_prev, dreamer
+
+    async def _night_lucky(self, day: int) -> int | None:
+        """Phase 1c：幸运儿的夜间三选一；返回幸运儿守护目标。"""
+        # --- 幸运儿（一次性：三选一 —— 查验 / 守护 / 子弹；用完就永远没有）---
+        lucky_guard: int | None = None
+        lucky = next((s for s in self.alive if s.role_key == "lucky"), None)
+        blocked = self.skill_gate(lucky, "幸运儿技能", day, "night") if lucky else None
+        if blocked:
+            lucky.private_events.append(f"第 {day} 夜：{blocked}")
+            self.ledger.add(day, "night", "private",
+                            "你被狼巫诅咒，本夜无法使用幸运技能。", seat=lucky.id,
+                            visible_to=(f"seat:{lucky.id}",))
+            lucky = None
+        # ⚠️ 用户 2026-10-09 改定：**第 1 夜不问幸运儿**（第 1 夜三个技能都没必要开：
+        #    守护可能奶穿、子弹/查验也没必要），**第 2 夜起**每个夜晚
+        #    给他一次决策轮；技能用掉之后夜间不再问（一次性的）。
+        if lucky and not lucky.lucky_used and day >= 2:
+            legal = [i for i in self.alive_ids()]
+            task = Task(kind="lucky",
+                        text=(f"第 {day} 夜，你使用**幸运儿**的一次性技能（**只有这一次**，用完永远没有）：\n"
+                              f"三选一 —— ① `check` 查验一个人是好人还是狼人；"
+                              f"② `guard` 让一个人今夜免于狼刀（守护与摄梦撞在同一个人身上会**奶穿**）；"
+                              f"③ `bullet` 选择**子弹**：你没有主动毒杀能力，但出局时（被放逐或被狼刀）"
+                              f"可以开枪带走一个人自证；**被毒死/被梦死不能开枪**。\n"
+                              f"选 `bullet` 时 `target` 留空；选 `check`/`guard` 必须给一个活人。\n"
+                              f"也可以选择**今晚不用**（`use: false`），留到后面的夜晚。"
+                              f"⚠️ 你看不到女巫/守卫这些技能的其它使用情况。"),
+                        schema=('{"reads": [{"seat": <编号>, "camp": "wolf|good", "why": "<一句>"}], '
+                                '"summary": "<一句判断>", "use": true/false, '
+                                '"skill": "check|guard|bullet", "target": <玩家编号或 null>, '
+                                '"reason": "<一句话>"}'),
+                        legal=legal, required=())
+            reply = await self.act(lucky, task)
+            if truthy(reply.get("use"), default=False):
+                skill = str(reply.get("skill") or "").strip().lower()
+                # ⚠️ 官方"守护不能连续两晚守同一人"这条限制在**本项目自动满足**：
+                #    幸运儿的技能是**一次性**的（用完永远没有），所以根本不存在
+                #    "下一夜再守同一个人"这种场面。（上一轮我在这里加过 lucky_last_guard
+                #    过滤 + 换人提示 —— 那是**永远走不到的死逻辑**，已删。）
+                # ⚠️ 2026-10-30 修：**不替他随机挑人**。以前 target 写糊 / 写了已死的人时，
+                #    coerce_seat 会随机挑一个活人 —— 一次性的毒可能就这样毒死好人，
+                #    与守卫（"不随机，按没守成处理"）和女巫的纪律相反。
+                tgt = self.coerce_seat(reply.get("target"), legal, default=None)
+                if skill not in ("check", "guard", "bullet") or (skill != "bullet" and tgt is None):
+                    # 技能名不认识 / 目标不可用：**不消耗**这次机会，并如实告诉他
+                    lucky.private_events.append(
+                        f"（系统提示）你的 skill 写成了 {reply.get('skill')!r}、"
+                        f"target 写成了 {reply.get('target')!r} —— 这一手按「没有使用」处理，"
+                        f"这次**没有消耗**你的幸运。请写 check/guard/bullet；"
+                        f"check/guard 要给一个活着的人，bullet 不用给目标。")
+                else:
+                    lucky.lucky_used = True
+                    if skill == "check":
+                        verdict = "狼人" if self.seat_by_id(tgt).camp == WOLF_CAMP else "好人"
+                        lucky.checked[tgt] = verdict
+                        lucky.private_events.append(
+                            f"第 {day} 夜：你用幸运技能查验了 {tgt}号，结果是【{verdict}】"
+                            f"（技能已用完）。")
+                        self.ledger.add(day, "night", "private",
+                                        f"你查验了 {tgt}号，结果是【{verdict}】。（幸运技能已用完）",
+                                        seat=lucky.id, visible_to=(f"seat:{lucky.id}",))
+                    elif skill == "guard":
+                        lucky_guard = tgt
+                        lucky.private_events.append(
+                            f"第 {day} 夜：你用幸运技能守护了 {tgt}号（技能已用完）。")
+                    else:
+                        lucky.lucky_bullet = True
+                        lucky.private_events.append(
+                            f"第 {day} 夜：你选择了**子弹**（技能已用完）。你出局时若死因是"
+                            f"「被放逐」或「被狼刀」，可以开枪带走一个人自证；"
+                            f"被毒死/被梦死不能开枪。")
+            else:
+                lucky.private_events.append(f"第 {day} 夜：你今晚没有使用幸运技能（留着）。")
+
+        return lucky_guard
+
+    async def _night_witch(self, day: int, victim: int | None) -> tuple[bool, int | None]:
+        """Phase 1c：女巫用药；返回 (是否用解药, 毒杀目标)。"""
+        # --- 女巫 ---
+        witch = next((s for s in self.alive if s.role_key == "witch"), None)
+        save = False
+        poison: int | None = None
+        blocked = self.skill_gate(witch, "女巫用药", day, "night") if witch else None
+        if blocked:
+            witch.private_events.append(f"第 {day} 夜：{blocked}（解药/毒药都没有使用）")
+            self.ledger.add(day, "night", "private",
+                            "你被狼巫诅咒，本夜无法开药。", seat=witch.id,
+                            visible_to=(f"seat:{witch.id}",))
+        elif witch and (self.witch_heal or self.witch_poison):
+            # ⚠️ 空刀时不能说"击杀的是 None号"—— 审计实测这会污染唯一事实来源。
+            # 2026-10-25（作者口径）：也不写"狼队空刀" —— 女巫的视角里只能得出
+            # "没有人被击杀"，至于是没出刀还是被别的原因挡住，她本来就分不清。
+            if victim is None:
+                witch.private_events.append(f"第 {day} 夜：今晚没有人被击杀。")
+            else:
+                witch.private_events.append(f"第 {day} 夜：狼人今晚击杀的是 {victim}号。")
+            legal = [i for i in self.alive_ids() if i != witch.id]
+            task = Task(
+                kind="witch",
+                # ⚠️ 2026-10-25（作者口径）：空刀时**只告诉女巫"今晚没有人被击杀"**，
+                #    不写"狼队空刀" —— 她从自己的视角分不清「狼队没出刀」还是「守护/别的原因挡住了」，
+                #    那是白天看到平安夜之后才谈得上判断的事。给她一个断言的结论＝白送情报。
+                text=((f"今晚被狼人击杀的是 {victim}号。"
+                       if victim is not None else
+                       "今晚没有人被击杀（你也没有得到刀口信息）。")
+                      + f"你的解药：{'还在' if self.witch_heal else '已用完'}；"
+                        f"毒药：{'还在' if self.witch_poison else '已用完'}。"
+                        "请注意：同一夜不能同时使用解药和毒药。请决定你的行动。"),
+                schema='{"save": true/false, "poison": <玩家编号或 null>, "reason": "<一句话理由>"}',
+                legal=legal,
+                extra={"victim": victim, "has_poison": self.witch_poison,
+                       # ⚠️ 前端一直在读 `ask.extra.has_heal`（界面据此决定"救"按钮能不能点），
+                       #    但引擎从来没发过这个字段 —— 靠的是对文案「你的解药：还在/已用完」
+                       #    做正则兜底。一旦文案改了就会退回"按钮可点、引擎静默忽略"。
+                       #    这里把字段补上（前端优先读它）。
+                       "has_heal": self.witch_heal},
+                required=("save",),
+            )
+            reply = await self.act(witch, task)
+            raw_save = reply.get("save")
+            wants_save = truthy(raw_save, default=False)     # 不再用 bool()：bool("false") 是 True
+            if isinstance(raw_save, str) and normalize_word(raw_save) not in (TRUE_WORDS | FALSE_WORDS):
+                witch.private_events.append(
+                    f"（系统提示）你的 save 字段写成了 {raw_save!r}，我按「不救」处理。请写 true/false。")
+            if victim is not None and self.witch_heal and wants_save:
+                save = True
+                self.witch_heal = False
+                witch.private_events.append(f"第 {day} 夜：你使用了解药，救回了 {victim}号。")
+            elif self.witch_poison and reply.get("poison") not in (None, "", 0, "0", "null", False):
+                poison = self.coerce_seat(reply.get("poison"), legal, default=None)
+                if poison:
+                    self.witch_poison = False
+                    witch.private_events.append(f"第 {day} 夜：你对 {poison}号 使用了毒药。")
+                else:
+                    # 想用毒但目标不合法（比如写了个乱码、或可毒的人都不在了）：
+                    # 药不扣，但要留一句话，别让模型以为自己毒成了
+                    options = "、".join(f"{i}号" for i in legal) or "无"
+                    witch.private_events.append(
+                        f"（系统提示）你想对 {reply.get('poison')!r} 用毒药，但那个目标不合法"
+                        f"（可毒的人：{options}），这一夜没有用毒，毒药还在。")
+        elif witch:
+            # 两瓶药都用完了 → 女巫这一夜**没有任何可做的行动**：干脆不调用她（省一次调用）。
+            # ⚠️ 判据是「解药与毒药**都**空了」：还剩任意一瓶就照旧问上面那条路 ——
+            #    别把「还没用」当成「已经用掉」。「用没用」只有一个事实来源：
+            #    `self.witch_heal` / `self.witch_poison`（真的用掉那一刻才置 False，见上面结算），
+            #    这里不新造第二套状态。
+            # ⚠️ 只写一条**中性事实**，而且只给她自己看（`seat:N`）：
+            #    · 不写狼刀目标 —— 她已经没有行动，告诉她只是白送好人一条夜间情报；
+            #    · 人类女巫在手机上只渲染台账（不渲染上下文包），所以台账也要留一条，
+            #      否则「这一夜没被问」看起来像引擎漏了。
+            idle = f"第 {day} 夜：你的两瓶药都已经用完了，今晚没有可做的行动。"
+            witch.private_events.append(idle)
+            self.ledger.add(day, "night", "private", idle,
+                            seat=witch.id, visible_to=(f"seat:{witch.id}",))
+
+        return save, poison
+
+    async def _night_wolf_kill(self, day: int) -> tuple[int | None, dict[int, dict]]:
+        """Phase 1d：狼队决策/夜聊/出刀整段；返回 (刀口, 各狼私下决定)。
+
+        只负责狼刀；狼巫诅咒由其后的 `wolf_curse` 调度处理（真人狼巫在出刀
+        同一次回复里已就地落诅咒，不由这里重复）。
+        """
         wolves = [s for s in self.alive if s.camp == WOLF_CAMP]
         #: 出刀的**合法目标 = 全体存活玩家**（含狼、含自己）。用户 2026-10-08 拍板：
         #: 「全体存活（队友也能刀，这才有刀队友骗药/做局的空间）」。
@@ -1154,13 +1586,19 @@ class Game:
                 return wolf, {"target": pre["target"],
                               "reason": "（沿用今晚早先的决定）",
                               "_prefetched": True}
+            human_witch = (wolf.is_human and wolf.role_key == "wolf_witch"
+                           and day >= 2 and self.skill_enabled("wolf_curse"))
             task = Task(
                 kind="wolf_kill",
-                text=f"现在是第 {day} 天夜晚，狼人行动。请提出今晚要击杀的目标，"
-                     f"并给一句理由（队友都能看到你的提议）。",
-                schema='{"target": <玩家编号>, "reason": "<一句话理由>"}',
+                text=(f"现在是第 {day} 天夜晚，狼人行动。请提出今晚要击杀的目标，"
+                      f"并给一句理由（队友都能看到你的提议）。"
+                      + ("\n⚠️ 你是【狼巫】：先选 `curse` 要诅咒谁（可以 null），再选 `target` 刀谁；"
+                         "诅咒封目标本夜+次日的技能。" if human_witch else "")),
+                schema=(('{"curse": <玩家编号或 null>, "target": <玩家编号>, '
+                         '"reason": "<一句话理由>"}') if human_witch else
+                        '{"target": <玩家编号>, "reason": "<一句话理由>"}'),
                 legal=kill_targets,
-                extra={"good": good_alive},
+                extra={"good": good_alive, **({"curse_legal": kill_targets} if human_witch else {})},
                 required=("target",),
             )
             return wolf, await self.act(wolf, task)
@@ -1191,6 +1629,12 @@ class Game:
             if target is None:
                 target = self.coerce_seat(reply.get("target"), good_alive)
             proposals[wolf.id] = target
+            if (wolf.is_human and wolf.role_key == "wolf_witch" and day >= 2
+                    and self.skill_enabled("wolf_curse")
+                    and not truthy(reply.get("abstain"), default=False)):
+                curse = self.coerce_seat(reply.get("curse"), kill_targets, default=None)
+                self._apply_curse_target(day, wolf, curse) if curse else wolf.private_events.append(
+                    f"第 {day} 夜：你今晚没有诅咒任何人。")
             self.ledger.add(day, "night", "night",
                             f"{wolf.id}号 提议击杀 {target}号：{reply.get('reason') or '（未给理由）'}",
                             seat=wolf.id, visible_to=(WOLF,),
@@ -1214,248 +1658,45 @@ class Game:
             self.ledger.add(day, "night", "night", f"狼队最终决定击杀 {victim}号。",
                             visible_to=(WOLF,))
 
-        # --- 预言家 ---
-        await self._seer_check(day)
+        return victim, wolf_intents
 
-        # --- 守卫 ---
+    async def _night_wolf_curse(self, day: int, wolf_intents: dict[int, dict]) -> None:
+        """Phase 1d：狼巫诅咒；仍在本局狼刀之后、预言家之前。"""
+        if not wolf_intents:
+            return
+        self._apply_wolf_curse(day, wolf_intents)
+
+    async def night(self) -> list[tuple[int, str]]:
+        day = self.day
+        # ⚠️ 首夜无刀（作者 2026-10-10）：整夜只跑预言家一次验人，其余夜间角色零调用。
+        #    必须是**这个位置**（在任何狼队决策之前）—— 见 `_quiet_first_night` 的说明。
+        if self.first_night_quiet and day == 1:
+            return await self._quiet_first_night(day)
+        victim: int | None = None
+        wolf_intents: dict[int, dict] = {}
         guard_target: int | None = None
-        guard = next((s for s in self.alive if s.role_key == "guard"), None)
-        if guard:
-            legal = [i for i in self.alive_ids() if i != guard.last_guard]
-            if not legal:
-                # 候选为空 = 只剩守卫自己、而昨晚守的正是自己。
-                # 不能退回"谁都能守"——那等于允许连守同一人（规则就被绕过去了），今晚空过。
-                guard.private_events.append(
-                    f"第 {day} 夜：没有可守护的目标（不能连守同一人），你今晚没有行动。")
-            else:
-                task = Task(kind="guard",
-                            text=("夜晚，你使用守卫技能守护一名玩家（不能连续两晚守同一个人，"
-                                  "可以守自己）；**也可以选择今晚不守**（`abstain` 填 true，"
-                                  "等于这一夜空过）。顺便写一句你对场上的判断（谁像狼、你在防谁），"
-                                  "这部分别人看不到。"),
-                            schema=('{"reads": [{"seat": <编号>, "camp": "wolf|good", '
-                                    '"why": "<一句>"}], "summary": "<一句判断>", '
-                                    '"abstain": true/false, "target": <玩家编号>, "reason": "<一句话>"}'),
-                            # ⚠️ `target` 不能进 required：选了弃守就没有 target。
-                            legal=legal, required=())
-                reply = await self.act(guard, task)
-                # 2026-10-25（作者口径）：**守卫可以放弃守护** —— 这是一个正式选项，
-                # 不是死代码（第一版只有代码分支、schema 里没有 abstain，等于没法表达；
-                # 现在 schema / 文案 / required 三处都放开了）。
-                if truthy(reply.get("abstain"), default=False):
-                    guard_target = None
-                    # ⚠️ 2026-10-31 外部审查 P1-07：弃守必须清掉"上一晚守过谁"。
-                    #    以前不清 —— 守卫「第 1 夜守 X → 第 2 夜空过 → 第 3 夜想守 X」
-                    #    会被当成"连守两晚"直接拒绝（候选因此为空时整夜静默不守）。
-                    #    摄梦人那两条同类分支（1136/1150）早就是清 `last_dream` 的写法。
-                    guard.last_guard = None
-                    guard.private_events.append(f"第 {day} 夜：你放弃了守护（今晚没人被守）。")
-                    self.ledger.add(day, "night", "private", "你今晚没有守护任何人（空过）。",
-                                    seat=guard.id, visible_to=(f"seat:{guard.id}",))
-                else:
-                    guard_target = self.coerce_seat(reply.get("target"), legal, default=None)
-                    if guard_target is None:
-                        # 写了目标但压不出来（乱码 / 写了个不合法的人）：如实说"没守成"，
-                        # 不替他随机挑一个 —— 守错人是会影响胜负的一手。
-                        guard.last_guard = None      # 空过的一夜不算链条的一环（同上）
-                        guard.private_events.append(
-                            f"第 {day} 夜：你没给出可守护的目标，今晚按「没有守护」处理。")
-                    else:
-                        guard.last_guard = guard_target
-                        guard.private_events.append(f"第 {day} 夜：你守护了 {guard_target}号。")
-
-        # --- 摄梦人（2026-10-09 新增；本项目默认板子用它顶替守卫）---
-        # 本项目：每晚可选梦游者（允许空过）；梦游者免疫夜间伤害；
-        #         摄梦人夜里死亡不再带走梦游者（2026-10-10 取消连死）；**连续两晚**成为梦游者也会死。
-        # 用户附加：**摄梦对象 + 解药 = 奶穿**（照样死，见下面结算）。
         dreamer_target: int | None = None
         dream_prev: int | None = None
-        dreamer = next((s for s in self.alive if s.role_key == "dreamer"), None)
-        if dreamer:
-            dream_prev = dreamer.last_dream          # 上一夜摄的是谁（判"连续两晚"用）
-            legal = list(self.alive_ids())          # 可以摄自己；没有"不能连摄"的限制
-            # ⚠️ 文案里**必须**带"第 N 夜"与"你上一夜摄的是谁"：
-            #    · 连续两晚摄同一人 = 那个人今晚会死 —— 不知道上一夜摄了谁就没法做这个决定；
-            #    · 实测（写这个功能时）我自己的回归脚本就是靠"第 N 夜"解析夜次的，
-            #      文案里没有夜次时脚本会把第 2 夜当成第 1 夜（假绿/假红的经典来源）。
-            _prev = f"你上一夜摄的是 {dream_prev}号（**今夜再摄他，他就会死**）。" if dream_prev else "这是第一夜，你还没有摄过任何人。"
-            task = Task(kind="dream",
-                        text=(f"第 {day} 夜，你使用摄梦人技能，**可以**选一名玩家成为梦游者"
-                              f"（可以摄自己，**也可以选择今晚空过/不摄**）。{_prev}"
-                              f"梦游者免疫夜间伤害，但他不知道自己在梦游；"
-                              f"你出局**不会**带走他（2026-10-10 起取消「连死」，跟守卫一样）。"
-                              f"顺便写一句你对场上的判断（谁像狼、你在防谁），别人看不到。"),
-                        schema=('{"reads": [{"seat": <编号>, "camp": "wolf|good", '
-                                '"why": "<一句>"}], "summary": "<一句判断>", '
-                                '"target": <玩家编号>, "reason": "<一句话>"}'),
-                        legal=legal, required=("target",))
-            reply = await self.act(dreamer, task)
-            # ⚠️ 用户改定：**允许摄梦人空过**（官方是"必须选"，本项目改成可以不发动）。
-            #    空过时把 last_dream 清掉 —— 否则"空过的那一夜"会被当成链条的一环，
-            #    下一夜再摄同一个人会被误判成"连续两晚"。
-            if truthy(reply.get("abstain"), default=False):
-                dreamer.last_dream = None
-                dreamer.private_events.append(f"第 {day} 夜：你今晚没有摄梦（空过）。")
-                self.ledger.add(day, "night", "private", "你今晚没有摄梦（空过）。",
-                                seat=dreamer.id, visible_to=(f"seat:{dreamer.id}",))
-                dreamer_target = None
-            else:
-                # ⚠️ 2026-10-30 修：**不替他随机挑人**。以前这里没传 default，
-                #    回复乱码/调用失败时会随机摄一个活人；万一随机撞上 `last_dream`，
-                #    还会被判成"连摄两晚"直接弄死他 —— 与守卫分支（"不随机，按没守成处理"）
-                #    是同一类纪律：摄错人会影响胜负。
-                dreamer_target = self.coerce_seat(reply.get("target"), legal, default=None)
-                if dreamer_target is None:
-                    # 没摄成 = 今夜空过：`last_dream` 必须清掉，否则下一夜会被当成
-                    # "连续两晚"链条的一环（同上面 abstain 分支的理由）。
-                    dreamer.last_dream = None
-                    dreamer.private_events.append(
-                        f"第 {day} 夜：你没给出可摄的目标，今晚按「没有摄梦」处理。")
-                    self.ledger.add(day, "night", "private",
-                                    "你今晚没有摄梦（没有给出可用的目标）。",
-                                    seat=dreamer.id, visible_to=(f"seat:{dreamer.id}",))
-                else:
-                    dreamer.last_dream = dreamer_target
-                    # 只让他自己知道结果；梦游者本人**不会**收到任何提示（官方：他不知道自己梦游）
-                    dreamer.private_events.append(f"第 {day} 夜：你摄梦了 {dreamer_target}号。")
-                    self.ledger.add(day, "night", "private",
-                                    f"你摄梦了 {dreamer_target}号。",
-                                    seat=dreamer.id, visible_to=(f"seat:{dreamer.id}",))
-
-        # --- 幸运儿（一次性：三选一 —— 查验 / 守护 / 子弹；用完就永远没有）---
+        dreamer: Seat | None = None
         lucky_guard: int | None = None
-        lucky = next((s for s in self.alive if s.role_key == "lucky"), None)
-        # ⚠️ 用户 2026-10-09 改定：**第 1 夜不问幸运儿**（第 1 夜三个技能都没必要开：
-        #    守护可能奶穿、子弹/查验也没必要），**第 2 夜起**每个夜晚
-        #    给他一次决策轮；技能用掉之后夜间不再问（一次性的）。
-        if lucky and not lucky.lucky_used and day >= 2:
-            legal = [i for i in self.alive_ids()]
-            task = Task(kind="lucky",
-                        text=(f"第 {day} 夜，你使用**幸运儿**的一次性技能（**只有这一次**，用完永远没有）：\n"
-                              f"三选一 —— ① `check` 查验一个人是好人还是狼人；"
-                              f"② `guard` 让一个人今夜免于狼刀（守护与摄梦撞在同一个人身上会**奶穿**）；"
-                              f"③ `bullet` 选择**子弹**：你没有主动毒杀能力，但出局时（被放逐或被狼刀）"
-                              f"可以开枪带走一个人自证；**被毒死/被梦死不能开枪**。\n"
-                              f"选 `bullet` 时 `target` 留空；选 `check`/`guard` 必须给一个活人。\n"
-                              f"也可以选择**今晚不用**（`use: false`），留到后面的夜晚。"
-                              f"⚠️ 你看不到女巫/守卫这些技能的其它使用情况。"),
-                        schema=('{"reads": [{"seat": <编号>, "camp": "wolf|good", "why": "<一句>"}], '
-                                '"summary": "<一句判断>", "use": true/false, '
-                                '"skill": "check|guard|bullet", "target": <玩家编号或 null>, '
-                                '"reason": "<一句话>"}'),
-                        legal=legal, required=())
-            reply = await self.act(lucky, task)
-            if truthy(reply.get("use"), default=False):
-                skill = str(reply.get("skill") or "").strip().lower()
-                # ⚠️ 官方"守护不能连续两晚守同一人"这条限制在**本项目自动满足**：
-                #    幸运儿的技能是**一次性**的（用完永远没有），所以根本不存在
-                #    "下一夜再守同一个人"这种场面。（上一轮我在这里加过 lucky_last_guard
-                #    过滤 + 换人提示 —— 那是**永远走不到的死逻辑**，已删。）
-                # ⚠️ 2026-10-30 修：**不替他随机挑人**。以前 target 写糊 / 写了已死的人时，
-                #    coerce_seat 会随机挑一个活人 —— 一次性的毒可能就这样毒死好人，
-                #    与守卫（"不随机，按没守成处理"）和女巫的纪律相反。
-                tgt = self.coerce_seat(reply.get("target"), legal, default=None)
-                if skill not in ("check", "guard", "bullet") or (skill != "bullet" and tgt is None):
-                    # 技能名不认识 / 目标不可用：**不消耗**这次机会，并如实告诉他
-                    lucky.private_events.append(
-                        f"（系统提示）你的 skill 写成了 {reply.get('skill')!r}、"
-                        f"target 写成了 {reply.get('target')!r} —— 这一手按「没有使用」处理，"
-                        f"这次**没有消耗**你的幸运。请写 check/guard/bullet；"
-                        f"check/guard 要给一个活着的人，bullet 不用给目标。")
-                else:
-                    lucky.lucky_used = True
-                    if skill == "check":
-                        verdict = "狼人" if self.seat_by_id(tgt).camp == WOLF_CAMP else "好人"
-                        lucky.checked[tgt] = verdict
-                        lucky.private_events.append(
-                            f"第 {day} 夜：你用幸运技能查验了 {tgt}号，结果是【{verdict}】"
-                            f"（技能已用完）。")
-                        self.ledger.add(day, "night", "private",
-                                        f"你查验了 {tgt}号，结果是【{verdict}】。（幸运技能已用完）",
-                                        seat=lucky.id, visible_to=(f"seat:{lucky.id}",))
-                    elif skill == "guard":
-                        lucky_guard = tgt
-                        lucky.private_events.append(
-                            f"第 {day} 夜：你用幸运技能守护了 {tgt}号（技能已用完）。")
-                    else:
-                        lucky.lucky_bullet = True
-                        lucky.private_events.append(
-                            f"第 {day} 夜：你选择了**子弹**（技能已用完）。你出局时若死因是"
-                            f"「被放逐」或「被狼刀」，可以开枪带走一个人自证；"
-                            f"被毒死/被梦死不能开枪。")
-            else:
-                lucky.private_events.append(f"第 {day} 夜：你今晚没有使用幸运技能（留着）。")
-
-        # --- 女巫 ---
-        witch = next((s for s in self.alive if s.role_key == "witch"), None)
         save = False
         poison: int | None = None
-        if witch and (self.witch_heal or self.witch_poison):
-            # ⚠️ 空刀时不能说"击杀的是 None号"—— 审计实测这会污染唯一事实来源。
-            # 2026-10-25（作者口径）：也不写"狼队空刀" —— 女巫的视角里只能得出
-            # "没有人被击杀"，至于是没出刀还是被别的原因挡住，她本来就分不清。
-            if victim is None:
-                witch.private_events.append(f"第 {day} 夜：今晚没有人被击杀。")
-            else:
-                witch.private_events.append(f"第 {day} 夜：狼人今晚击杀的是 {victim}号。")
-            legal = [i for i in self.alive_ids() if i != witch.id]
-            task = Task(
-                kind="witch",
-                # ⚠️ 2026-10-25（作者口径）：空刀时**只告诉女巫"今晚没有人被击杀"**，
-                #    不写"狼队空刀" —— 她从自己的视角分不清「狼队没出刀」还是「守护/别的原因挡住了」，
-                #    那是白天看到平安夜之后才谈得上判断的事。给她一个断言的结论＝白送情报。
-                text=((f"今晚被狼人击杀的是 {victim}号。"
-                       if victim is not None else
-                       "今晚没有人被击杀（你也没有得到刀口信息）。")
-                      + f"你的解药：{'还在' if self.witch_heal else '已用完'}；"
-                        f"毒药：{'还在' if self.witch_poison else '已用完'}。"
-                        "请注意：同一夜不能同时使用解药和毒药。请决定你的行动。"),
-                schema='{"save": true/false, "poison": <玩家编号或 null>, "reason": "<一句话理由>"}',
-                legal=legal,
-                extra={"victim": victim, "has_poison": self.witch_poison,
-                       # ⚠️ 前端一直在读 `ask.extra.has_heal`（界面据此决定"救"按钮能不能点），
-                       #    但引擎从来没发过这个字段 —— 靠的是对文案「你的解药：还在/已用完」
-                       #    做正则兜底。一旦文案改了就会退回"按钮可点、引擎静默忽略"。
-                       #    这里把字段补上（前端优先读它）。
-                       "has_heal": self.witch_heal},
-                required=("save",),
-            )
-            reply = await self.act(witch, task)
-            raw_save = reply.get("save")
-            wants_save = truthy(raw_save, default=False)     # 不再用 bool()：bool("false") 是 True
-            if isinstance(raw_save, str) and normalize_word(raw_save) not in (TRUE_WORDS | FALSE_WORDS):
-                witch.private_events.append(
-                    f"（系统提示）你的 save 字段写成了 {raw_save!r}，我按「不救」处理。请写 true/false。")
-            if victim is not None and self.witch_heal and wants_save:
-                save = True
-                self.witch_heal = False
-                witch.private_events.append(f"第 {day} 夜：你使用了解药，救回了 {victim}号。")
-            elif self.witch_poison and reply.get("poison") not in (None, "", 0, "0", "null", False):
-                poison = self.coerce_seat(reply.get("poison"), legal, default=None)
-                if poison:
-                    self.witch_poison = False
-                    witch.private_events.append(f"第 {day} 夜：你对 {poison}号 使用了毒药。")
-                else:
-                    # 想用毒但目标不合法（比如写了个乱码、或可毒的人都不在了）：
-                    # 药不扣，但要留一句话，别让模型以为自己毒成了
-                    options = "、".join(f"{i}号" for i in legal) or "无"
-                    witch.private_events.append(
-                        f"（系统提示）你想对 {reply.get('poison')!r} 用毒药，但那个目标不合法"
-                        f"（可毒的人：{options}），这一夜没有用毒，毒药还在。")
-        elif witch:
-            # 两瓶药都用完了 → 女巫这一夜**没有任何可做的行动**：干脆不调用她（省一次调用）。
-            # ⚠️ 判据是「解药与毒药**都**空了」：还剩任意一瓶就照旧问上面那条路 ——
-            #    别把「还没用」当成「已经用掉」。「用没用」只有一个事实来源：
-            #    `self.witch_heal` / `self.witch_poison`（真的用掉那一刻才置 False，见上面结算），
-            #    这里不新造第二套状态。
-            # ⚠️ 只写一条**中性事实**，而且只给她自己看（`seat:N`）：
-            #    · 不写狼刀目标 —— 她已经没有行动，告诉她只是白送好人一条夜间情报；
-            #    · 人类女巫在手机上只渲染台账（不渲染上下文包），所以台账也要留一条，
-            #      否则「这一夜没被问」看起来像引擎漏了。
-            idle = f"第 {day} 夜：你的两瓶药都已经用完了，今晚没有可做的行动。"
-            witch.private_events.append(idle)
-            self.ledger.add(day, "night", "private", idle,
-                            seat=witch.id, visible_to=(f"seat:{witch.id}",))
+        for key in (*self.skills_for_event("night_wolf"), *self.skills_for_event("night")):
+            if key == "wolf_kill":
+                got = await self.run_skill_async(key, day)
+                victim, wolf_intents = got if got else (None, {})
+            elif key == "wolf_curse":
+                await self.run_skill_async(key, day, wolf_intents)
+            elif key == "seer_check":
+                await self.run_skill_async(key, day)
+            elif key == "guard":
+                guard_target = await self.run_skill_async(key, day)
+            elif key == "dream":
+                dreamer_target, dream_prev, dreamer = await self.run_skill_async(key, day)
+            elif key == "lucky_skill":
+                lucky_guard = await self.run_skill_async(key, day)
+            elif key == "witch_potions":
+                save, poison = await self.run_skill_async(key, day, victim)
 
         # --- 结算 ---
         # 规则细节：同一人既被刀又被毒只死一次，死因记为"毒"（影响猎人能否开枪）
@@ -1779,11 +2020,13 @@ class Game:
                   f"1) 回顾你已知的信息 + 目前为止所有人的发言，逐个点评活着的玩家"
                   f"（{ '、'.join(f'{i}号' for i in others) }）：好人还是狼？像什么身份？为什么？\n"
                   f"2) 判断你该**保谁**、该**打谁**（要打就打最像狼的）。\n"
-                  f"3) {extra}\n"
-                  f"4) 定下你的立场，以及**你此刻的投票倾向**（vote）—— 注意：这只是倾向，"
+                  f"3) 先点出**本局新发生的变化**：至少引用一条具体票型/死亡/新验人（谁投了谁、谁没投、谁出局）；"
+                  f"警下或后续发言**禁止把竞选稿/上一轮发言原样复读**，没有新信息就直说「判断不变」。\n"
+                  f"4) {extra}\n"
+                  f"5) 定下你的立场，以及**你此刻的投票倾向**（vote）—— 注意：这只是倾向，"
                   f"不是承诺。等所有人都说完，你还会在投票前**再独立决策一次**，"
                   f"那时候可以改（听到新消息就该改）。\n"
-                  f"5) 用 `speech` 写出你这一轮**要说出口的话**（口语化，500 字以内）："
+                  f"6) 用 `speech` 写出你这一轮**要说出口的话**（口语化，500 字以内）："
                   f"把你的判断讲出来，可以质疑别人、可以施压。"
                   f"你可以说「目前更倾向 X，等听完再定」——**不要**发誓一定投谁。\n"
                   f"⚠️ 公开正文可以点「X号是悍跳狼 / 他跳预言家」，也可以说「我判断狼队是…」；\n"
@@ -1793,8 +2036,11 @@ class Game:
                   + ("（如果你是狼且 explode=true：**不用写 speech**；自爆后直接进夜，没有爆后发言/遗言。）"
                      if self.can_explode(seat) else "")
                   + "\n"
-                  f"⚠️ 时间线：要报夜间信息就写「**昨晚**我验的 X 号 / 昨晚被刀的是 X 号」；"
+                  f"⚠️ 时间线：要报**你自己**的夜间信息就写「**昨晚**我验的 X 号 / 昨晚被刀的是 X 号」；"
                   f"**不要**拿今天才公开的东西（谁上警、前置/后置位、今天的发言）解释昨晚为什么那样做。"
+                  f"复述**别人今天报的**验人结果，直接说「X号今天给我发金水 / X号报我是金水」，"
+                  f"不要写「X号昨晚报的金水」；「昨晚」只用于你自己夜里的动作/刀口。"
+                  f"说别人出局/翻牌：用「昨天被放逐/今天翻牌」，不要写成「昨晚翻牌」。"
                   + lie_note + TIER_RULES),
             schema=('{"reads": [{"seat": <编号>, "camp": "wolf|good", "role": "<猜的身份或 未知>", '
                     '"why": "<一句>"}], "tiers": [{"seat": <编号>, '
@@ -1959,7 +2205,10 @@ class Game:
                 legal=legal, required=("reads", "vote"),
             )
             # 养鸦人：**在同一次调用里**先决定诅咒、再决定投票（用户 2026-10-09 改定的时机）
-            if seat.role_key == "crow" and round_no == 1 and not self.cursed_today:
+            if (seat.role_key == "crow"
+                    and "crow_curse" in self.skills_for_event("day_vote")
+                    and round_no == 1 and not self.cursed_today
+                    and not self.skill_gate(seat, "养鸦人诅咒", day, "day")):
                 task.text += self._crow_curse_prompt(seat, day, round_no)
                 task.schema = task.schema[:-1] + ', "curse_target": <编号或 null>}'
                 task.extra = {**(task.extra or {}), "curse": True,
@@ -1991,7 +2240,7 @@ class Game:
             # ⚠️ 2026-10-30：调用失败（`_error`）时**不写**「这一轮没有使用诅咒」——
             #    那是把上游失败记成玩家主动放弃，会误导它下一轮的判断。
             if seat.role_key == "crow" and round_no == 1 and "_error" not in reply:
-                self._apply_crow_curse(seat, reply)
+                await self.run_skill_async("crow_curse", seat, reply)
             reads = self._digest_reads(reply)
             summary = str(reply.get("summary") or "").strip()[:300]
             decided[seat.id] = {
@@ -2021,8 +2270,18 @@ class Game:
         零额外调用：这类信息走 `seat.private_events` + 台账私有条目，他当天那次决策
         （发言前的决策 / 投票前的决策）自然就带上了。
         """
+        if not self.skill_enabled("gravekeeper_result"):
+            return
         grave = next((x for x in self.alive if x.role_key == "gravekeeper"), None)
         if grave is None:
+            return
+        blocked = self.skill_gate(grave, "守墓人验尸", day, "day")
+        if blocked:
+            grave.private_events.append(
+                f"第 {day} 天：{blocked} 拿不到上一个放逐者的阵营；这条信息不会补发。")
+            self.ledger.add(day, "day", "private",
+                            "你被狼巫诅咒，本日守墓技能失效，没有新信息。",
+                            seat=grave.id, visible_to=(f"seat:{grave.id}",))
             return
         last = self.last_exiled                     # 上一个白天真正被放逐的人
         if last is None:
@@ -2071,6 +2330,10 @@ class Game:
         玩家以为咒的是 A、实际咒的是 B（实测把这当成"已经是别人的票"了）。
         现在的口径：踩禁区就**不发动**，并如实说明原因。
         """
+        blocked = self.skill_gate(crow, "养鸦人诅咒", self.day, "day")
+        if blocked:
+            crow.private_events.append(f"第 {self.day} 天：{blocked}")
+            return
         raw = reply.get("curse_target")
         legal = self._crow_curse_legal(crow, self.day)
         if raw in (None, "", 0, "0", "null", "None") or not legal:
@@ -2107,9 +2370,11 @@ class Game:
         """
         base = (f"第 {day} 天白天，轮到你发言。请说明你的判断：谁是狼、谁像好人、"
                 f"你此刻倾向投谁（这只是倾向，投票前你还会再想一次、可以变），并给理由。"
+                f"先引用至少一条具体票型/死亡/新验人；警下发言不要复读上一轮。"
                 f"控制在 500 字以内。\n"
-                f"⚠️ 时间线：报夜间信息一律用「**昨晚**我验的 X 号」这种过去时；"
-                f"**不要**拿今天才公开的信息（谁上警、前置/后置位、今天的发言）当昨晚的理由。\n"
+                f"⚠️ 时间线：报**你自己**的夜间信息一律用「**昨晚**我验的 X 号」这种过去时；"
+                f"**不要**拿今天才公开的信息（谁上警、前置/后置位、今天的发言）当昨晚的理由。"
+                f"复述**别人今天报的**验人结果，直接说「X号今天给我发金水」，不要写「X号昨晚报的金水」。\n"
                 f"⚠️ 公开正文可以点「X号是悍跳狼 / 他跳预言家」，也可以说「我判断狼队是…」；"
                 f"不能自称「我悍跳 / 我是假预 / 我们狼队」，报身份说「我是预言家」。")
         # 优先用「发言前的那次决策」（它看得到目前为止所有人的发言），退回到投票决策
@@ -2167,7 +2432,8 @@ class Game:
         immune_night: list[tuple[int, str]] = []
         for sid, cause in list(night_deaths):
             seat = self.seat_by_id(sid)
-            if seat and seat.role_key == "idiot" and not seat.revealed_idiot:
+            if (seat and seat.role_key == "idiot" and not seat.revealed_idiot
+                    and not self.skill_gate(seat, "愚者免死", day, "day")):
                 night_deaths.remove((sid, cause))
                 immune_night.append((sid, cause))
         if night_deaths:
@@ -2251,7 +2517,8 @@ class Game:
         # ⚠️ 用户 2026-10-09 改定：**不占夜间调用**。原先是在夜里推一条私有记录（虽然不花调用，
         #    但时机不对：那时他还没听到今天的发言）。现在挪到白天发言轮开始之前 ——
         #    他当天那次发言决策/投票决策都能带着这条信息一起想，而且**零额外调用**。
-        self._tell_gravekeeper(day)
+        for _key in self.skills_for_event("day_start"):
+            await self.run_skill_async(_key, day)
 
         # --- 依次发言 ---
         # 「决策在前」：每个座位发言前各做一次**高思考**调用，而且那一次调用**同时产出
@@ -2324,7 +2591,8 @@ class Game:
 
         # --- 骑士审判：白天全场发言结束后、放逐投票开始前，每局一次 ---
         # ⚠️ 用户 2026-11-07 口径：审判后**当天放逐投票照常**，不因戳死狼/自己与狼王同归于尽而跳票。
-        await self.knight_judge(day)
+        for _key in self.skills_for_event("day_before_vote"):
+            await self.run_skill_async(_key, day)
         if self.check_win():
             return
 
@@ -2433,14 +2701,16 @@ class Game:
             # ⚠️ 只在 round_no == 1 且**今天还没咒过**时加：
             #    决策在前那条路上，诅咒已经在 `analyze_round` 里生效了
             #    （那次回复被 prefetch 到这里复用）—— 再问一次就成了"今天咒两次"。
-            if (voter.role_key == "crow" and round_no == 1
-                    and not self.cursed_today):
+            if (voter.role_key == "crow"
+                    and "crow_curse" in self.skills_for_event("day_vote")
+                    and round_no == 1 and not self.cursed_today
+                    and not self.skill_gate(voter, "养鸦人诅咒", day, "day")):
                 task.text += self._crow_curse_prompt(voter, day, round_no)
                 task.schema = task.schema[:-1] + ', "curse_target": <编号或 null>}'
                 task.extra = {**(task.extra or {}), "curse": True,
                               "curse_legal": self._crow_curse_legal(voter, day)}
                 reply = await self.act(voter, task)
-                self._apply_crow_curse(voter, reply)
+                await self.run_skill_async("crow_curse", voter, reply)
                 return voter, legal, reply
             return voter, legal, await self.act(voter, task)
 
@@ -2613,8 +2883,17 @@ class Game:
 
     async def knight_judge(self, day: int) -> None:
         """骑士在白天放逐投票前的一次性审判；每局只问一次。"""
+        if not self.skill_enabled("knight_judge"):
+            return
         knight = next((s for s in self.alive if s.role_key == "knight" and not s.knight_used), None)
         if knight is None:
+            return
+        blocked = self.skill_gate(knight, "骑士审判", day, "day")
+        if blocked:
+            knight.private_events.append(f"第 {day} 天：{blocked}（技能没有消耗）")
+            self.ledger.add(day, "day", "private",
+                            "你被狼巫诅咒，本日无法发动骑士审判。",
+                            seat=knight.id, visible_to=(f"seat:{knight.id}",))
             return
         legal = [i for i in self.alive_ids() if i != knight.id]
         if not legal:
@@ -2675,6 +2954,13 @@ class Game:
         `daytime=True` = 白天那一枪（自己被放逐）：被打死的人**有遗言**、死因公示"被子弹打死"。
         `daytime=False` = 夜里那一枪（自己夜里被刀）：没有遗言、不公示死因（用户定的规则）。
         """
+        blocked = self.skill_gate(hunter, "猎人开枪", self.day, "day")
+        if blocked:
+            hunter.private_events.append(blocked + " 本枪不能开。")
+            self.ledger.add(self.day, "day", "private",
+                            "你被狼巫诅咒，猎人开枪失效。", seat=hunter.id,
+                            visible_to=(f"seat:{hunter.id}",))
+            return
         legal = list(self.alive_ids())
         if not legal:
             return
@@ -2705,7 +2991,8 @@ class Game:
         #    先判胜负就把他那一口吃掉了（§56 的结算次序）。
         victim_seat = self.seat_by_id(target)
         if victim_seat.role_key == "wolf_king":
-            await self.wolf_king_take(victim_seat, where="你被猎人开枪带走", daytime=daytime)
+            await self.run_skill_async("wolf_king_take", victim_seat,
+                                        where="你被猎人开枪带走", daytime=daytime)
         if self.check_win():
             return
         if daytime:
@@ -2726,6 +3013,13 @@ class Game:
         被狼王带走 / 被枪带走都不能开枪。子弹只有一次，开了就消耗。
         """
         if lucky is None or not lucky.lucky_bullet:
+            return
+        blocked = self.skill_gate(lucky, "幸运儿子弹", self.day, "day")
+        if blocked:
+            lucky.private_events.append(blocked + " 本枪不能开。")
+            self.ledger.add(self.day, "day", "private",
+                            "你被狼巫诅咒，幸运儿子弹失效。", seat=lucky.id,
+                            visible_to=(f"seat:{lucky.id}",))
             return
         lucky.lucky_bullet = False                  # 先落闸：多条死亡路径不许重复触发
         legal = list(self.alive_ids())
@@ -2759,8 +3053,8 @@ class Game:
             return
         victim_seat = self.seat_by_id(target)
         if victim_seat.role_key == "wolf_king":
-            await self.wolf_king_take(victim_seat, where="你被幸运儿开枪带走",
-                                      daytime=daytime)
+            await self.run_skill_async("wolf_king_take", victim_seat,
+                                        where="你被幸运儿开枪带走", daytime=daytime)
         if self.check_win():
             return
         if daytime:
@@ -2803,9 +3097,18 @@ class Game:
         `prefetched`：自爆那一路**并进同一份决策**的目标（见 `decide_for_speech` /
         `wolf_explode_round`）—— 给了合法目标就不再额外花一次调用（作者要求：避免额外调用）。
         """
+        if not self.skill_enabled("wolf_king_take"):
+            return
         if king is None or king.alive or king.king_done:
             return
         king.king_done = True                       # 先落闸：四条死亡路径都不许重复触发
+        blocked = self.skill_gate(king, "狼王带人", self.day, "day")
+        if blocked:
+            king.private_events.append(blocked + " 不能带走任何人。")
+            self.ledger.add(self.day, "day", "private",
+                            "你被狼巫诅咒，狼王带人技能失效。", seat=king.id,
+                            visible_to=(f"seat:{king.id}",))
+            return
         targets = self.king_targets(king)
         if not targets:
             self.ledger.add(self.day, "day", "announce",
@@ -3336,7 +3639,8 @@ class Game:
             victim.mind = self._append_mind(victim.mind, f"第 {day} 天我自爆了。")
         self.emit("death", seat=who, cause="explode")   # 让服务端补一条 status（顶部划掉）
         if victim.role_key == "wolf_king":
-            await self.wolf_king_take(victim, where="你自爆了", daytime=True, prefetched=take)
+            await self.run_death_skills(victim, daytime=True, where="你自爆了",
+                                        prefetched=take)
         # ⚠️ 2026-10-31 外部审查 P1-08：以前这里完全不管警徽 —— 带警徽的狼自爆后
         #    警长一直停在尸体上，既没有传承也没有「警徽流失」公告，1.5 票权静默消失。
         #    另外三条死亡路径（夜里 / 被票 / 被枪）都调了 handle_sheriff_death，
@@ -3372,8 +3676,11 @@ class Game:
                       ("你是警长候选人（**后置位**：前面的人已经说完了），"
                        "现在轮到你发言 —— 可以总结前面的发言、拉票、号召大家把票投给谁。"))
                      + "说说你当上警长后会怎么带队、你的判断，或者亮出你的身份。500 字以内。\n"
-                       "⚠️ 时间线：报夜间信息一律用「**昨晚**我验的 X 号 / 昨晚被刀的是 X 号」；"
+                       "⚠️ 如果你在这一段里报预言家（真预或悍跳）：**必须同段报第一、第二两个警徽流**（各一个号），"
+                       "不能只说「等会儿再报第二个」或先归票；顺序：昨晚验人 → 第一流 → 第二流 → 警徽去向/归票。\n"
+                       "⚠️ 时间线：报**你自己**的夜间信息一律用「**昨晚**我验的 X 号 / 昨晚被刀的是 X 号」；"
                        "**不要**拿今天才公开的东西（谁上警、前置/后置位、今天的发言）当昨晚的理由。"
+                       "复述**别人今天报的**验人结果，直接说「X号今天给我发金水」，不要写「X号昨晚报的金水」。"
                      + ("\n**你是狼：先回答一件事 —— 这一轮要不要自爆？**"
                         "（`explode` 填 true 就直接自爆、不再发这段言、**没有爆后发言/遗言**；填 false 再写 `speech`。）\n"
                         + king_take_hint(seat)
@@ -3527,7 +3834,8 @@ class Game:
             task = Task(
                 kind="sheriff_speech",
                 text=(f"警长竞选你和平票了（{tie_text}）。请再发一轮言：说明为什么该选你、"
-                      f"或者指出对手的问题，说服大家改投你。300 字以内。"),
+                      f"或者指出对手的问题，说服大家改投你。300 字以内。\n"
+                      f"⚠️ 如果你继续报预言家：必须同段报第一、第二两个警徽流，各一个号；不能只补一个。"),
                 schema=('{"speech": "<你的竞选 PK 发言，300 字以内>", '
                         '"claim": "<你声称的身份，没有就写 无>", "reason": "<你的真实想法>"}'),
                 legal=[i for i in tied if i != seat_id],
@@ -3625,7 +3933,8 @@ class Game:
         seat = self.seat_by_id(seat_id)
         if not seat.alive:
             return False
-        if seat.role_key == "idiot" and not seat.revealed_idiot:
+        if (seat.role_key == "idiot" and not seat.revealed_idiot
+                and not self.skill_gate(seat, "愚者免死", self.day, "day")):
             self._idiot_reveal(seat, cause=cause)
             return False
         seat.alive = False
@@ -3849,6 +4158,8 @@ class Game:
 
         return {
             "board": self.board,
+            # 技能库 Phase 0：这一局到底编译了哪些技能（复盘/对比用）。
+            "active_skills": list(self.active_skills),
             "day": self.day,
             "winner": self.winner,
             "aborted": self.aborted,
@@ -3905,6 +4216,8 @@ class Game:
                     "lucky_bullet": s.lucky_bullet,
                     # 狼王是否已经用过"带走一人"（复盘要看得出他那一口到底用没用）
                     "king_done": s.king_done,
+                    # 狼巫诅咒覆盖的夜/天；复盘要能看出目标哪天被封印
+                    "cursed_day": s.cursed_day,
                 }
                 for s in self.seats
             ]),

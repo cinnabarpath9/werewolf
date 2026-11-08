@@ -1433,6 +1433,7 @@
 
 <footer id="footer"></footer>
 
+<script src="/skill_panels.js"></script>
 <script>
 const $ = (id) => document.getElementById(id);
 let ws = null, reconnectTimer = null;
@@ -1487,8 +1488,8 @@ let startTimer = 0;             // 「确认开局」后的兜底计时器
 
 //: 板子在页面上的名字与光晕。服务端只给规则摘要，标题属于表达层，放前端。
 const BOARD_META = {
-  eleven_knight: { title: '骑士局', glow: 'rgba(228,192,124,.17)',
-                   blurb: '首夜无刀，骑士白天一次审判，狼王与骑士可同归于尽；预女骑愚 + 摄梦/守墓/养鸦，屠边。' },
+  eleven_knight: { title: '狼巫骑士局', glow: 'rgba(228,192,124,.17)',
+                   blurb: '首夜无刀，2小狼+狼王+狼巫；狼巫从第2夜先诅咒再出刀，被咒者本夜+次日失去技能。预女骑愚 + 摄梦/守墓/养鸦，屠边。' },
   eleven_wolfking: { title: '狼王局（旧）', glow: 'rgba(228,192,124,.17)',
                      blurb: '首夜无刀，狼王出局可带走一名好人。预女梦愚 + 三张民牌，屠边。' },
   twelve_standard: { title: '标准十二人', glow: 'rgba(125,156,255,.17)',
@@ -5289,147 +5290,48 @@ function renderAsk(f, ask) {
   }
 
   if (ask.kind === 'witch') {
-    const extra = ask.extra || {};
-    const victim = extra.victim;
-    const hasPoison = extra.has_poison;
-    // 解药还剩不剩：优先信服务端的 `has_heal`；老服务端没有这个字段就从 ask.text 里读
-    //（引擎现在写的是「你的解药：已用完」/「你的解药：还在」）。两边都判断不出来 → null，保持现状。
-    const healLeft = healState(ask);
-    const noVictim = (victim === null || victim === undefined);
-    let save = false, poison = null;
-    const saveRow = document.createElement('div'); saveRow.className = 'seatpick';
-    const bYes = mkBtn(`救 ${victim}号（用解药）`, () => { save = true; poison = null; paint(); });
-    const bNo = mkBtn('不救', () => { save = false; paint(); });
-    saveRow.append(bYes, bNo);
-    f.appendChild(saveRow);
-
-    const poisonRow = document.createElement('div'); poisonRow.className = 'seatpick';
-    if (hasPoison) {
-      const bNone = mkBtn('不用毒', () => { poison = null; paint(); });
-      poisonRow.appendChild(bNone);
-      legal.forEach(id => poisonRow.appendChild(mkBtn(`毒 ${id}号`, () => { poison = id; save = false; paint(); })));
-    }
-    f.appendChild(poisonRow);
-
-    const confirm = mkBtn('确认', () => {
-      answer({ save, poison, reason: '人类玩家自己决定的' });
-      S.ask = null; renderFooter();
-    }, 'primary');
-    f.appendChild(confirm);
-    paint();
-
-    function paint() {
-      bYes.classList.toggle('on', save);
-      bNo.classList.toggle('on', !save);
-      // ⚠️ 「救 X号」这个按钮以前永远可点：解药用完之后点它，前端发 {save:true}，
-      // 引擎静默忽略（既不救也不提示），玩家以为救了人 —— 一局就这么输了。
-      // 现在没有解药 / 今晚没人被刀就禁用按钮，并把原因写在按钮上。
-      if (healLeft === false || noVictim) {
-        bYes.disabled = true;
-        bYes.textContent = noVictim ? '今晚没人被刀（不用解药）' : `救 ${victim}号（解药已用完）`;
-        bYes.title = noVictim ? '狼队今晚空刀，解药没有用武之地' : '解药已经用完了';
-        if (save) { save = false; bYes.classList.remove('on'); bNo.classList.add('on'); }
-      }
-      [...poisonRow.children].forEach(b => {
-        const isNone = b.textContent === '不用毒';
-        b.classList.toggle('on', isNone ? poison === null : poison === parseInt(b.textContent.match(/\d+/)[0], 10));
-      });
-    }
+    SkillPanels.renderWitch(f, ask, {
+      mkBtn: (text, fn, cls) => mkBtn(text, fn, cls),
+      answer,
+      done: () => { S.ask = null; renderFooter(); },
+    });
     return;
   }
 
-  // 幸运儿（本项目民牌，**一次性三选一**）：必须先选技能、再选人。
-  // ⚠️ 实测踩到：这条以前走通用选座面板 → 前端只发 {target}，引擎读不到 use/skill
-  //    （`truthy(reply.get("use"))` 为假）→ 真人**永远用不出**这个技能，而且面板上
-  //    根本没有"选哪个技能"的入口。所以这里给它一个两步面板。
+  // 幸运儿：共享 SkillPanels.renderLucky（index/play 同一套三选一）。
   if (ask.kind === 'lucky') {
-    const hint = document.createElement('div');
-    hint.className = 'hint';
-    hint.textContent = '三选一，用完就永远没有：① 查验（看阵营）② 守护（今夜挡狼刀）'
-      + '③ 子弹（不主动杀人；被放逐/被狼刀出局时可开枪带走一人自证，被毒/被梦死不能开）。也可以留到以后再用。';
-    f.appendChild(hint);
-
-    let skill = null;
-    let picked = null;
-    const skillRow = document.createElement('div');
-    skillRow.className = 'seatpick';
-    const seatRow = document.createElement('div');
-    seatRow.className = 'seatpick';
-    seatRow.style.display = 'none';
-
-    const skillDefs = [['check', '① 查验'], ['guard', '② 守护'], ['bullet', '③ 子弹']];
-    skillDefs.forEach(([key, text]) => {
-      const b = mkBtn(text, () => {
-        skill = key;
-        [...skillRow.children].forEach(x => x.classList.remove('on'));
-        b.classList.add('on');
-        // 子弹是“出局时才开”的被动技能，这一手不需要目标。
-        seatRow.style.display = key === 'bullet' ? 'none' : 'flex';
-        toast(key === 'bullet'
-          ? '选子弹不用挑目标，点确认就行；出局时再选人'
-          : '选一个 ' + text.slice(2) + ' 的目标，再点确认');
-      });
-      skillRow.appendChild(b);
+    SkillPanels.renderLucky(f, ask, {
+      mkBtn: (text, fn, cls) => mkBtn(text, fn, cls),
+      answer,
+      done: () => { S.ask = null; renderFooter(); },
     });
-    f.appendChild(skillRow);
-
-    legal.forEach(id => {
-      const b = mkBtn(id + '号', () => {
-        picked = id;
-        [...seatRow.children].forEach(x => x.classList.remove('on'));
-        b.classList.add('on');
-      });
-      seatRow.appendChild(b);
-    });
-    f.appendChild(seatRow);
-
-    const confirm = mkBtn('确认用掉这次机会', () => {
-      if (!skill) { toast('先选一个技能'); return; }
-      if (skill !== 'bullet' && picked === null) { toast('再选一个目标'); return; }
-      answer({ use: true, skill, target: skill === 'bullet' ? null : picked,
-               reason: '人类玩家自己决定的' });
-      S.ask = null; renderFooter();
-    }, 'primary');
-    const later = mkBtn('留到以后（今晚不用）', () => {
-      answer({ use: false, reason: '人类玩家留着不用' });
-      S.ask = null; renderFooter();
-    }, 'ghost');
-    const btnRow = document.createElement('div');
-    btnRow.className = 'seatpick';
-    btnRow.appendChild(confirm);
-    btnRow.appendChild(later);
-    f.appendChild(btnRow);
     return;
   }
 
-  // 骑士审判（新默认板）：先决定是否发动，再选目标；不发动直接提交。
+  // 骑士审判 + 猎人/子弹：共享渲染。
   if (ask.kind === 'knight_judge') {
-    const hint = document.createElement('div');
-    hint.className = 'hint';
-    hint.textContent = '每局一次：审判狼人 → 对方翻牌出局；审判狼王 → 你和狼王一起出局，狼王不能带人；审判好人 → 只公示对方是好人阵营，你不出局，但票权降为 0.5。无论结果，今天照常放逐投票。';
-    f.appendChild(hint);
-    const row = document.createElement('div'); row.className = 'seatpick';
-    let picked = null;
-    legal.forEach(id => {
-      const b = mkBtn(id + '号', () => {
-        picked = id;
-        [...row.children].forEach(x => x.classList.remove('on'));
-        b.classList.add('on');
-      });
-      row.appendChild(b);
+    SkillPanels.renderKnight(f, ask, {
+      mkBtn: (text, fn, cls) => mkBtn(text, fn, cls),
+      answer,
+      done: () => { S.ask = null; renderFooter(); },
     });
-    f.appendChild(row);
-    const confirm = mkBtn('发动审判', () => {
-      if (picked === null) { toast('先选一个审判目标'); return; }
-      answer({ use: true, target: picked, reason: '人类玩家自己决定' });
-      S.ask = null; renderFooter();
-    }, 'primary');
-    const no = mkBtn('不发动（保留到以后）', () => {
-      answer({ use: false, reason: '人类玩家选择不发动' });
-      S.ask = null; renderFooter();
-    }, 'ghost');
-    const btnRow = document.createElement('div'); btnRow.className = 'seatpick';
-    btnRow.appendChild(confirm); btnRow.appendChild(no); f.appendChild(btnRow);
+    return;
+  }
+  if (ask.kind === 'hunter_shoot' || ask.kind === 'lucky_shoot') {
+    SkillPanels.renderShoot(f, ask, {
+      mkBtn: (text, fn, cls) => mkBtn(text, fn, cls),
+      answer,
+      done: () => { S.ask = null; renderFooter(); },
+    });
+    return;
+  }
+
+  if (ask.kind === 'wolf_king_take') {
+    SkillPanels.renderWolfKing(f, ask, {
+      mkBtn: (text, fn, cls) => mkBtn(text, fn, cls),
+      answer,
+      done: () => { S.ask = null; renderFooter(); },
+    });
     return;
   }
 
@@ -5440,12 +5342,16 @@ function renderAsk(f, ask) {
   // ⚠️ 服务端用 `ask.extra.curse` 告诉我们"这一票还附带诅咒选择"（别靠猜文案）。
   let curseTarget = null;
   let curseOn = false;
-  if (ask.kind === 'vote' && (ask.extra || {}).curse) {
+  const isWolfCurse = ask.kind === 'wolf_kill' && ((ask.extra || {}).curse_legal || []).length > 0;
+  if ((ask.kind === 'vote' && (ask.extra || {}).curse) || isWolfCurse) {
     const cTitle = document.createElement('div');
     cTitle.className = 'hint';
-    cTitle.textContent = '养鸦人：被咒的人今天会额外多一票（只体现在票数上，'
-      + '可以连着几天咒同一个人；结果里他会公开带「咒标」，但别人看不到是谁咒的）。'
-      + '先决定诅咒，再决定投谁。';
+    cTitle.textContent = isWolfCurse
+      ? '狼巫：先决定诅咒谁（可不用），再决定刀谁。被诅咒者本夜+次日技能失效；'
+        + '诅咒不公开，目标只会收到私有提示。'
+      : '养鸦人：被咒的人今天会额外多一票（只体现在票数上，'
+        + '可以连着几天咒同一个人；结果里他会公开带「咒标」，但别人看不到是谁咒的）。'
+        + '先决定诅咒，再决定投谁。';
     f.appendChild(cTitle);
     const cRow = document.createElement('div'); cRow.className = 'seatpick';
     const cLegal = ((ask.extra || {}).curse_legal || []);
@@ -5559,6 +5465,7 @@ function renderAsk(f, ask) {
     const payload = { [field]: picked === 0 ? null : picked,
                       reason: '人类玩家自己决定的' };
     if (curseOn && curseTarget !== null) payload.curse_target = curseTarget;
+    if (isWolfCurse) payload.curse = (curseOn && curseTarget !== null) ? curseTarget : null;
     answer(payload);
     S.ask = null; renderFooter();
   }, 'primary');

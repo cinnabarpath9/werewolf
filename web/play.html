@@ -119,6 +119,7 @@
 </main>
 
 <script src="https://cdn.jsdelivr.net/pyodide/v0.26.4/full/pyodide.js"></script>
+<script src="skill_panels.js"></script>
 <script>
 const $ = (id) => document.getElementById(id);
 const STORE = 'wolf.play.provider';
@@ -310,93 +311,117 @@ function renderAsk(ask) {
     return b;
   };
 
-  // 投票：只给合法目标 + 弃权
+  // 投票：合法目标 + 弃权；养鸦人额外带诅咒。
   if (ask.kind === 'vote' || ask.kind === 'sheriff_vote') {
-    for (const n of legal) row.appendChild(btn(n + '号', { vote: n }));
-    row.appendChild(btn('弃权', { abstain: true, reason: '弃权' }));
+    let curse = null;
+    const cLegal = ask.kind === 'vote' && window.SkillPanels ? SkillPanels.curseTargets(ask) : [];
+    if (cLegal.length) {
+      const cr = document.createElement('div'); cr.className = 'row';
+      cr.appendChild(btn('不用诅咒', () => { curse = null; }));
+      for (const n of cLegal) cr.appendChild(btn('咒 ' + n + '号', () => { curse = n; }));
+      body.appendChild(cr);
+    }
+    for (const n of legal) {
+      row.appendChild(btn(n + '号', () => {
+        const p = { vote: n, reason: '人类玩家自己决定的' };
+        if (curse !== null) p.curse_target = curse;
+        send(p);
+      }));
+    }
+    row.appendChild(btn('弃权', () => {
+      const p = { abstain: true, reason: '弃权' };
+      if (curse !== null) p.curse_target = curse;
+      send(p);
+    }));
     body.appendChild(row);
     return;
   }
 
-  // 骑士审判：先选目标（可选不发动）；审判后今天仍照常投票。
+  // 骑士审判：共享 SkillPanels.renderKnight。
   if (ask.kind === 'knight_judge') {
-    const r = document.createElement('div'); r.className = 'row';
-    for (const n of legal) {
-      r.appendChild(btn('审判 ' + n + '号', { use: true, target: n, reason: '人类玩家自己决定' }));
-    }
-    body.appendChild(r);
-    body.appendChild(btn('不发动（保留到以后）',
-      { use: false, reason: '人类玩家选择不发动' }));
+    SkillPanels.renderKnight(body, ask, {
+      mkBtn: (text, fn) => { const b=document.createElement('button'); b.textContent=text; b.onclick=fn; return b; },
+      answer: send, done: () => {},
+    });
     return;
   }
 
-  // 幸运儿：一次性三选一；子弹不需要目标，选了就提交。
+  // 幸运儿：共享 SkillPanels.renderLucky。
   if (ask.kind === 'lucky') {
-    const pickSkill = (skill) => {
-      if (skill === 'bullet') {
-        send({ use: true, skill: 'bullet', target: null, reason: '选了子弹' });
-        return;
-      }
-      body.innerHTML = '';
-      const r = document.createElement('div'); r.className = 'row';
-      for (const n of legal) {
-        r.appendChild(btn('选 ' + n + '号', () => send({
-          use: true, skill, target: n, reason: '人类玩家自己决定的',
-        })));
-      }
-      body.appendChild(r);
-    };
-    const r = document.createElement('div'); r.className = 'row';
-    r.appendChild(btn('① 查验', () => pickSkill('check')));
-    r.appendChild(btn('② 守护', () => pickSkill('guard')));
-    r.appendChild(btn('③ 子弹（出局时开枪）', () => pickSkill('bullet')));
-    body.appendChild(r);
-    body.appendChild(btn('留到以后（今晚不用）',
-      { use: false, reason: '人类玩家留着不用' }));
+    SkillPanels.renderLucky(body, ask, {
+      mkBtn: (text, fn) => {
+        const b = document.createElement('button');
+        b.textContent = text;
+        b.onclick = fn;
+        return b;
+      },
+      answer: send,
+      done: () => {},
+    });
     return;
   }
 
-  // 猎人 / 幸运儿子弹：选目标或不开枪
+  // 猎人 / 幸运儿子弹：共享 SkillPanels.renderShoot。
   if (ask.kind === 'hunter_shoot' || ask.kind === 'lucky_shoot') {
-    for (const n of legal) {
-      row.appendChild(btn(n + '号', { shoot: n, reason: '人类玩家自己决定的' }));
+    SkillPanels.renderShoot(body, ask, {
+      mkBtn: (text, fn) => { const b=document.createElement('button'); b.textContent=text; b.onclick=fn; return b; },
+      answer: send, done: () => {},
+    });
+    return;
+  }
+
+  if (ask.kind === 'wolf_king_take') {
+    SkillPanels.renderWolfKing(body, ask, {
+      mkBtn: (text, fn) => { const b=document.createElement('button'); b.textContent=text; b.onclick=fn; return b; },
+      answer: send, done: () => {},
+    });
+    return;
+  }
+
+  // 纯选目标类技能：index/play 共用 SkillPanels.seatField。
+  // 狼巫的 curse 是 wolf_kill 的附加选择：先选诅咒，再点刀人，一次提交。
+  const seatField = window.SkillPanels ? SkillPanels.seatField(ask.kind) : null;
+  if (seatField) {
+    let curse = null;
+    const cLegal = window.SkillPanels ? SkillPanels.curseTargets(ask) : [];
+    if (cLegal.length) {
+      const cr = document.createElement('div'); cr.className = 'row';
+      cr.appendChild(btn('不诅咒', () => { curse = null; }));
+      for (const n of cLegal) {
+        cr.appendChild(btn('咒 ' + n + '号', () => { curse = n; }));
+      }
+      body.appendChild(cr);
     }
-    row.appendChild(btn('不开枪', { shoot: null, reason: '人类玩家选择不开枪' }));
+    for (const n of legal) {
+      row.appendChild(btn(n + '号', () => {
+        const p = {}; p[seatField] = n;
+        if (curse !== null) p.curse = curse;
+        p.reason = '人类玩家自己决定的';
+        send(p);
+      }));
+    }
+    if (ask.kind === 'dream' || ask.kind === 'guard') {
+      row.appendChild(btn('今晚空过', { abstain: true, reason: '人类玩家选择空过' }));
+    }
+    if (ask.kind === 'wolf_king_take') {
+      row.appendChild(btn('不带人', { take: null, reason: '人类玩家选择不带人' }));
+    }
     body.appendChild(row);
     return;
   }
 
-  // 女巫：解药 / 毒药 两组（引擎要 {"save":bool,"poison":n|null,"reason":str}）
+  // 女巫：共享 SkillPanels.renderWitch（index/play 同一套救/毒逻辑）。
   if (ask.kind === 'witch') {
-    // 引擎给的是 has_heal / has_poison（2026-10-25 口径）；缺省当"有"，别把按钮藏没了
-    const canSave = !(ask.extra && ask.extra.has_heal === false);
-    const canPoison = !(ask.extra && ask.extra.has_poison === false);
-    const reason = document.createElement('input');
-    reason.placeholder = '一句话理由（可空）';
-    if (canSave) {
-      const r1 = document.createElement('div'); r1.className = 'row';
-      r1.appendChild(btn('💉 用解药救人', () => ({ save: true, poison: null, reason: (reason.value || '').trim() || '救人' })));
-      r1.appendChild(btn('不用解药', () => ({ save: false, poison: null, reason: (reason.value || '').trim() || '不救' })));
-      body.appendChild(r1);
-    }
-    if (canPoison && legal.length) {
-      const r2 = document.createElement('div'); r2.className = 'row';
-      for (const n of legal) {
-        r2.appendChild(btn('☠ 毒 ' + n + '号',
-          () => ({ save: false, poison: n, reason: (reason.value || '').trim() || '毒' })));
-      }
-      r2.appendChild(btn('不毒',
-        () => ({ save: false, poison: null, reason: (reason.value || '').trim() || '不用毒' })));
-      body.appendChild(r2);
-    }
-    // 审查 P1-7：两瓶药都用完（或候选为空）时以前一个按钮都没有 → 只能等超时
-    if (!canSave && (!canPoison || !legal.length)) {
-      const r3 = document.createElement('div'); r3.className = 'row';
-      r3.appendChild(btn('空过（今晚不用药）',
-        () => ({ save: false, poison: null, reason: '没有可用的药' })));
-      body.appendChild(r3);
-    }
-    body.appendChild(reason);
+    SkillPanels.renderWitch(body, ask, {
+      mkBtn: (text, fn) => {
+        const b = document.createElement('button');
+        b.textContent = text;
+        b.onclick = fn;
+        return b;
+      },
+      answer: send,
+      done: () => {},
+    });
     return;
   }
 

@@ -7,7 +7,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 WOLF = "wolf"
 GOOD = "good"
@@ -21,6 +21,9 @@ class RoleDef:
     kind: str          # wolf / god / villager  —— 用于屠边判定
     night: str | None  # kill / check / witch / guard / shoot_on_death / None
     brief: str         # 一句话身份说明，会进模型上下文
+    #: 这张牌拥有的技能 key（`wolf/skills.py` 的唯一归属）。
+    #: 换板子/加角色时只看这张表；不在板子里的角色不会编译出它的技能。
+    skills: tuple[str, ...] = ()
     #: 屠边判定时**同时**算成另一种（"白痴算民也算神"就靠它）。
     #: ⚠️ 这条规则很要紧：狼人不管想屠神还是屠民，都必须把白痴也杀死 ——
     #: 否则会在白痴还活着的时候被误判成"那一边已经死光"，狼人白捡一个胜场。
@@ -112,6 +115,13 @@ ROLES: dict[str, RoleDef] = {
         "你都可以**当场带走场上一名好人**（**不能带走狼队友**，带谁要公开指定）。"
         "⚠️ 本板子狼王**不能自爆**：自爆这条路对你关闭。",
     ),
+    "wolf_witch": RoleDef(
+        "wolf_witch", "狼巫", WOLF, "wolf", "kill",
+        "你属于狼队，夜里和队友共同出刀。**从第 2 夜起**，你每晚可以额外诅咒一张活着的牌："
+        "被诅咒者**本夜和次日**失去技能（狼刀照常另算）。你的行动和狼刀合在一次决策里："
+        "先输出 `curse` 要诅咒谁，再输出 `target` 要刀谁；`curse` 可以填 null 不用。"
+        "诅咒不会公开，目标会收到私有提示；它只封技能，不封发言和投票。",
+    ),
     "knight": RoleDef(
         "knight", "骑士", GOOD, "god", None,
         "你每局有**一次**「骑士审判」：在白天放逐投票之前，可以公开翻牌审判一名其他玩家。"
@@ -129,6 +139,27 @@ ROLES: dict[str, RoleDef] = {
         "（之后夜里也不会再问你）。⚠️ 守护与摄梦撞在同一个人身上一样会**奶穿**。",
     ),
 }
+
+#: 角色 → 技能归属。**唯一事实源**：SkillDef.owner_roles 必须与此一致。
+#: 新增角色/技能先改这里，再在 `skills.py` 登记元数据；引擎的现有分支暂时不动。
+_SKILLS_BY_ROLE = {
+    "wolf": ("wolf_kill",),
+    "seer": ("seer_check",),
+    "witch": ("witch_potions",),
+    "hunter": ("hunter_shoot",),
+    "guard": ("guard",),
+    "villager": (),
+    "dreamer": ("dream",),
+    "idiot": ("idiot_immune",),
+    "gravekeeper": ("gravekeeper_result",),
+    "crow": ("crow_curse",),
+    "wolf_king": ("wolf_kill", "wolf_king_take"),
+    "wolf_witch": ("wolf_kill", "wolf_curse"),
+    "knight": ("knight_judge",),
+    "lucky": ("lucky_skill", "lucky_bullet"),
+}
+for _role, _skill_keys in _SKILLS_BY_ROLE.items():
+    ROLES[_role] = replace(ROLES[_role], skills=tuple(_skill_keys))
 
 
 @dataclass
@@ -149,14 +180,21 @@ class BoardDef:
     reveal_on_death: bool = False
     #: 是否出现在产品板子列表里（旧的默认板降为隐藏的回归/兼容板时置 False）
     visible: bool = True
+    #: **板子自己的技能顺序**；不写就按 SkillDef.order。Phase 0 只用于元数据/
+    #: 校验/未来调度，现有 engine.night 仍按旧硬编码顺序跑。
+    skill_order: tuple[str, ...] = ()
+    #: 板子级技能变体（例如同一角色不同板子参数不同）；Phase 0 先留槽位。
+    skill_variants: dict[str, str] = field(default_factory=dict)
 
 
 def _b(name: str, roles: list[str], desc: str, win_rule: str = "sides",
        first_night_quiet: bool = False, reveal_on_death: bool = False,
-       visible: bool = True) -> BoardDef:
+       visible: bool = True, skill_order: tuple[str, ...] = (),
+       skill_variants: dict[str, str] | None = None) -> BoardDef:
     return BoardDef(name=name, roles=roles, win_rule=win_rule, desc=desc,
                     first_night_quiet=first_night_quiet, reveal_on_death=reveal_on_death,
-                    visible=visible)
+                    visible=visible, skill_order=tuple(skill_order),
+                    skill_variants=dict(skill_variants or {}))
 
 
 #: 常见配置，**不是官方标准**，你可以照着自己那套规则改，或者在 config.yaml 里自定义。
@@ -169,12 +207,13 @@ BUILTIN_BOARDS: dict[str, BoardDef] = {
     #: 2026-11-07 新默认板：幸运儿退场，摄梦人降为民（机制不变），新增骑士；
     #: 愚者改成「任何死因免疫一次 + 保留 0.5 票」。
     "eleven_knight": _b("eleven_knight",
-                        ["wolf", "wolf", "wolf", "wolf_king",
+                        ["wolf", "wolf", "wolf_king", "wolf_witch",
                          "seer", "witch", "knight", "idiot",
                          "dreamer", "gravekeeper", "crow"],
-                        "11 人（骑士版·**当前默认**）：3 狼 + 1 狼王 + 预言家、女巫、"
+                        "11 人（狼巫版·**当前默认**）：2 小狼 + 1 狼王 + **1 狼巫** + 预言家、女巫、"
                         "**骑士**、**愚者** + **摄梦人（民）/守墓人/养鸦人**。"
                         "首夜无刀；女巫与摄梦人从第 2 夜起行动。"
+                        "狼巫从第 2 夜起每晚先诅咒一张牌（本夜+次日失去技能），再和狼队出刀；"
                         "骑士每局一次白天审判（狼死/好人只公示阵营且骑士掉到 0.5 票/狼王与骑士同死且不能带人），"
                         "审判后仍正常放逐投票。愚者免疫一次任何出局、保留 0.5 票；算神也算民。",
                         first_night_quiet=True),
@@ -241,7 +280,9 @@ def make_board(name: "str | BoardDef", custom: dict | None = None) -> BoardDef:
                         win_rule=name.win_rule, desc=name.desc,
                         first_night_quiet=bool(getattr(name, "first_night_quiet", False)),
                         reveal_on_death=bool(getattr(name, "reveal_on_death", False)),
-                        visible=bool(getattr(name, "visible", True)))
+                        visible=bool(getattr(name, "visible", True)),
+                        skill_order=tuple(getattr(name, "skill_order", ()) or ()),
+                        skill_variants=dict(getattr(name, "skill_variants", {}) or {}))
     if custom and name in custom:
         raw = custom[name] or {}
         roles = raw.get("roles") if isinstance(raw, dict) else raw
@@ -252,7 +293,9 @@ def make_board(name: "str | BoardDef", custom: dict | None = None) -> BoardDef:
                         first_night_quiet=bool((raw or {}).get("first_night_quiet")) if isinstance(raw, dict) else False,
                         # 自定义板子也能开「出局亮身份」（config.yaml 里写 reveal_on_death: true）
                         reveal_on_death=bool((raw or {}).get("reveal_on_death")) if isinstance(raw, dict) else False,
-                        visible=bool((raw or {}).get("visible", True)) if isinstance(raw, dict) else True)
+                        visible=bool((raw or {}).get("visible", True)) if isinstance(raw, dict) else True,
+                        skill_order=tuple((raw or {}).get("skill_order") or ()) if isinstance(raw, dict) else (),
+                        skill_variants=dict((raw or {}).get("skill_variants") or {}) if isinstance(raw, dict) else {})
     if name in BUILTIN_BOARDS:
         # ⚠️ 必须**拷贝**再返回：直接返回模块级对象的话，谁写一句
         # `board.roles.append(...)` 就把 BUILTIN_BOARDS 本身改了，
@@ -262,7 +305,9 @@ def make_board(name: "str | BoardDef", custom: dict | None = None) -> BoardDef:
                         win_rule=base.win_rule, desc=base.desc,
                         first_night_quiet=bool(getattr(base, "first_night_quiet", False)),
                         reveal_on_death=bool(getattr(base, "reveal_on_death", False)),
-                        visible=bool(getattr(base, "visible", True)))
+                        visible=bool(getattr(base, "visible", True)),
+                        skill_order=tuple(getattr(base, "skill_order", ()) or ()),
+                        skill_variants=dict(getattr(base, "skill_variants", {}) or {}))
     raise KeyError(f"没有这个板子：{name}（内置：{'、'.join(BUILTIN_BOARDS)}）")
 
 
@@ -304,6 +349,12 @@ def validate_board(board: BoardDef) -> list[str]:
             issues.append(f"{board.name}：屠边规则要求至少有一个村民")
     if board.win_rule not in ("sides", "all"):
         issues.append(f"{board.name}：win_rule 只能是 sides（屠边）或 all（屠城），现在写的是 {board.win_rule}")
+    # 技能库 Phase 0：角色引用的每个技能都必须在 SKILLS 登记，且归属一致。
+    try:
+        from .skills import validate_board_skills
+        issues.extend(validate_board_skills(board))
+    except Exception as exc:  # noqa: BLE001  —— 技能库自身坏掉也要变成人话，而不是建局崩
+        issues.append(f"{board.name}：技能库校验失败（{type(exc).__name__}: {exc}）")
     return issues
 
 

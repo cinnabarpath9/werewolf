@@ -59,8 +59,10 @@ def build(state, seat, task: Task) -> str:
     if book:
         # 主角色书**不带任务块**：任务块全部由下面的包尾补章发。
         # 这样夜里→白天、发言→投票切换时，前面这一大段稳定前缀不因任务而变。
+        active_skills = set(getattr(state, "active_skills", ()) or ())
         block = tabletalk.playbook_block(
-            tabletalk.filter_role(book, seat.role_key, camp, phase, set()))
+            tabletalk.filter_role(book, seat.role_key, camp, phase, set(),
+                                  skills=active_skills))
         if block:
             parts.append(block)
 
@@ -325,6 +327,7 @@ _CLAIM_ALIASES: dict[str, str] = {
     # 「我是狼王」认不出来的话，引擎会当成"报了个不认识的身份"，
     # 小狼装狼王的骗票战术就拿不到那一章参考资料了。
     "狼王": "wolf_king", "wolf_king": "wolf_king", "wolfking": "wolf_king",
+    "狼巫": "wolf_witch", "狼巫师": "wolf_witch", "wolf_witch": "wolf_witch",
     # 这些不是身份，只是「我没什么身份可报」的说法 —— 认出来是为了**排除**掉
     "无": "", "没有": "", "none": "", "null": "", "-": "", "": "",
 }

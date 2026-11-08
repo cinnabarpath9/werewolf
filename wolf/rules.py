@@ -131,7 +131,7 @@ def _strip_markdown(text: str) -> str:
 def compose(board_roles, sheriff: bool = False, detail: str = "brief",
             path: str = DEFAULT_PATH, first_night_quiet: bool = False,
             seer_auto_run: bool = False, reveal_on_death: bool = False,
-            win_rule: str = "sides") -> str:
+            win_rule: str = "sides", skills=None) -> str:
     """按本局板子拼出给模型的规则文本。
 
     `board_roles` = `BoardDef.roles`（角色 key 列表，可重复）。重复的角色只发一次。
@@ -173,6 +173,21 @@ def compose(board_roles, sheriff: bool = False, detail: str = "brief",
             raise KeyError(f"规则书里没有角色 [{role_key}] 的片段（{path}）；"
                            f"请补一段 <!-- frag:role:{role_key}:begin --> … end -->")
         keys.append(key)
+    # 技能片段（Phase 2）：只发本局 active_skills 里、声明了 skill: 规则的技能。
+    # 角色片段只留身份/定位，具体技能结算集中在这里，避免新技能改两处。
+    if skills is None:
+        from .skills import skills_for_roles
+        skills = skills_for_roles(list(board_roles))
+    from .skills import SKILLS
+    for skill_key in sorted(skills, key=lambda k: (SKILLS[k].order, k) if k in SKILLS else (999, k)):
+        sd = SKILLS.get(skill_key)
+        if not sd or not sd.rules_frag.startswith("skill:"):
+            continue
+        frag_key = sd.rules_frag
+        if frag_key not in frags:
+            raise KeyError(f"规则书里没有技能 [{skill_key}] 的片段（{path}）；"
+                           f"请补一段 <!-- frag:{frag_key}:begin --> … end -->")
+        keys.append(frag_key)
     if sheriff:
         if SHERIFF not in frags:
             raise KeyError(f"规则书里没有警长片段（{path}）")

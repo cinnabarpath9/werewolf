@@ -2889,6 +2889,13 @@ async def _validation_error(request: Request, exc: RequestValidationError):
     return JSONResponse({"error": "请求参数不对（" + "；".join(fields) + "）"}, status_code=400)
 
 
+@app.get("/skill_panels.js")
+async def skill_panels_js():
+    """共享技能面板元数据（index.html / play.html 共用，见 web/skill_panels.js）。"""
+    return FileResponse(os.path.join(WEB_DIR, "skill_panels.js"),
+                        media_type="text/javascript",
+                        headers={"Cache-Control": "no-store, must-revalidate"})
+
 @app.get("/")
 async def index():
     # ⚠️ 2026-10-08 加 `Cache-Control: no-store`：这一页是**改完就想立刻生效**的开发页
