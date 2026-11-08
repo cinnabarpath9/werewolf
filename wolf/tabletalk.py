@@ -466,7 +466,8 @@ def filter_role_only(text: str, role_key: str, phase: str = "") -> str:
     #    少认一种，那个标记就不会被消费掉，`_filter_role` 会因为"标记序列断了"而收错段。
     marks: list[tuple[int, str]] = []
     for i, line in enumerate(lines):
-        m = re.match(r"\s*<!--\s*frag:(all|god|role:[a-z_]+|camp:(?:wolf|good)|wolf|good|end"
+        m = re.match(r"\s*<!--\s*frag:(all|god|role:[a-z_]+|skill:[a-z_]+|"
+                     r"camp:(?:wolf|good)|wolf|good|end"
                      r"|part:(?:open|mid|late)|endpart)\s*-->\s*$", line)
         if m:
             marks.append((i, m.group(1)))
@@ -483,7 +484,8 @@ def filter_role_only(text: str, role_key: str, phase: str = "") -> str:
         #    这句自称会让引擎给一头小狼附参考章 —— 不丢的话，附上来的东西里带着整整一章狼人，
         #    而那一章他主包里早就有（P3-3 的同一类事故：同一章进两遍）。
         is_other_role = what.startswith("role:") and what != own_role_frag
-        if what != "all" and not is_camp and not is_other_role:
+        is_skill = what.startswith("skill:")
+        if what != "all" and not is_camp and not is_other_role and not is_skill:
             continue
         # ⚠️ 段的结束位置必须是**它自己的 `frag:end`**，不能是"下一个标记"：
         #    角色章内部有 `frag:part:open/mid/late` 这些标记，按"下一个标记"算的话
@@ -500,7 +502,7 @@ def filter_role_only(text: str, role_key: str, phase: str = "") -> str:
             # ⚠️ 通用片段**保留标题行**（结构还在，一眼能看出"这里原本有一段通用的"）；
             #    但**阵营片段连标题一起丢** —— 参考章是给狼"穿身份"用的，
             #    里面挂着一行「好人战略」纯属噪音（2026-10-09：3b 就是被这个标题判红的）。
-            if is_camp or is_other_role:
+            if is_camp or is_other_role or is_skill:
                 drop.add(j)
                 continue
             # ⚠️ 判的是**原始行**：`_clean()` 会先把 `### x` 变成 `· x`，
@@ -522,7 +524,8 @@ def filter_role_only(text: str, role_key: str, phase: str = "") -> str:
     # 按阶段过滤：这是"狼穿身份时附的参考章"，同样不该把残局/开局专门节全塞进去
     if phase:
         out = _filter_part("\n".join(out), phase).splitlines()
-    return _clean(_filter_role("\n".join(out), key, "", phase))
+    # 参考章只要角色本身：技能书片段一律不附（主包已按 active_skills 发过）。
+    return _clean(_filter_role("\n".join(out), key, "", phase, skills=set()))
 
 
 def load_meta_book(project_root: str, path: str = "", camp: str = "") -> str:

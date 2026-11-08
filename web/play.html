@@ -310,6 +310,15 @@ function renderAsk(ask) {
     b.onclick = () => send(typeof payload === 'function' ? payload() : payload);
     return b;
   };
+  // 只改状态、不提交的按钮：不要复用 btn，否则 payload() 返回 undefined 会立刻 send。
+  const rawBtn = (text, onClick, cls) => {
+    const b = document.createElement('button');
+    b.textContent = text;
+    b.onclick = onClick;
+    if (cls) b.className = cls;
+    return b;
+  };
+  const skillBtn = (text, fn, cls) => rawBtn(text, fn, cls);
 
   // 投票：合法目标 + 弃权；养鸦人额外带诅咒。
   if (ask.kind === 'vote' || ask.kind === 'sheriff_vote') {
@@ -317,18 +326,29 @@ function renderAsk(ask) {
     const cLegal = ask.kind === 'vote' && window.SkillPanels ? SkillPanels.curseTargets(ask) : [];
     if (cLegal.length) {
       const cr = document.createElement('div'); cr.className = 'row';
-      cr.appendChild(btn('不用诅咒', () => { curse = null; }));
-      for (const n of cLegal) cr.appendChild(btn('咒 ' + n + '号', () => { curse = n; }));
+      const paintCurse = () => {
+        [...cr.children].forEach((b) => {
+          const label = b.textContent || '';
+          const hit = label === '不用诅咒' ? curse === null
+            : label === ('咒 ' + curse + '号');
+          b.classList.toggle('on', hit);
+        });
+      };
+      cr.appendChild(rawBtn('不用诅咒', () => { curse = null; paintCurse(); }));
+      for (const n of cLegal) {
+        cr.appendChild(rawBtn('咒 ' + n + '号', () => { curse = n; paintCurse(); }));
+      }
       body.appendChild(cr);
+      paintCurse();
     }
     for (const n of legal) {
-      row.appendChild(btn(n + '号', () => {
+      row.appendChild(rawBtn(n + '号', () => {
         const p = { vote: n, reason: '人类玩家自己决定的' };
         if (curse !== null) p.curse_target = curse;
         send(p);
       }));
     }
-    row.appendChild(btn('弃权', () => {
+    row.appendChild(rawBtn('弃权', () => {
       const p = { abstain: true, reason: '弃权' };
       if (curse !== null) p.curse_target = curse;
       send(p);
@@ -340,7 +360,7 @@ function renderAsk(ask) {
   // 骑士审判：共享 SkillPanels.renderKnight。
   if (ask.kind === 'knight_judge') {
     SkillPanels.renderKnight(body, ask, {
-      mkBtn: (text, fn) => { const b=document.createElement('button'); b.textContent=text; b.onclick=fn; return b; },
+      mkBtn: skillBtn,
       answer: send, done: () => {},
     });
     return;
@@ -349,12 +369,7 @@ function renderAsk(ask) {
   // 幸运儿：共享 SkillPanels.renderLucky。
   if (ask.kind === 'lucky') {
     SkillPanels.renderLucky(body, ask, {
-      mkBtn: (text, fn) => {
-        const b = document.createElement('button');
-        b.textContent = text;
-        b.onclick = fn;
-        return b;
-      },
+      mkBtn: skillBtn,
       answer: send,
       done: () => {},
     });
@@ -364,7 +379,7 @@ function renderAsk(ask) {
   // 猎人 / 幸运儿子弹：共享 SkillPanels.renderShoot。
   if (ask.kind === 'hunter_shoot' || ask.kind === 'lucky_shoot') {
     SkillPanels.renderShoot(body, ask, {
-      mkBtn: (text, fn) => { const b=document.createElement('button'); b.textContent=text; b.onclick=fn; return b; },
+      mkBtn: skillBtn,
       answer: send, done: () => {},
     });
     return;
@@ -372,7 +387,7 @@ function renderAsk(ask) {
 
   if (ask.kind === 'wolf_king_take') {
     SkillPanels.renderWolfKing(body, ask, {
-      mkBtn: (text, fn) => { const b=document.createElement('button'); b.textContent=text; b.onclick=fn; return b; },
+      mkBtn: skillBtn,
       answer: send, done: () => {},
     });
     return;
@@ -386,14 +401,23 @@ function renderAsk(ask) {
     const cLegal = window.SkillPanels ? SkillPanels.curseTargets(ask) : [];
     if (cLegal.length) {
       const cr = document.createElement('div'); cr.className = 'row';
-      cr.appendChild(btn('不诅咒', () => { curse = null; }));
+      const paintCurse = () => {
+        [...cr.children].forEach((b) => {
+          const label = b.textContent || '';
+          const hit = label === '不诅咒' ? curse === null
+            : label === ('咒 ' + curse + '号');
+          b.classList.toggle('on', hit);
+        });
+      };
+      cr.appendChild(rawBtn('不诅咒', () => { curse = null; paintCurse(); }));
       for (const n of cLegal) {
-        cr.appendChild(btn('咒 ' + n + '号', () => { curse = n; }));
+        cr.appendChild(rawBtn('咒 ' + n + '号', () => { curse = n; paintCurse(); }));
       }
       body.appendChild(cr);
+      paintCurse();
     }
     for (const n of legal) {
-      row.appendChild(btn(n + '号', () => {
+      row.appendChild(rawBtn(n + '号', () => {
         const p = {}; p[seatField] = n;
         if (curse !== null) p.curse = curse;
         p.reason = '人类玩家自己决定的';
@@ -413,12 +437,7 @@ function renderAsk(ask) {
   // 女巫：共享 SkillPanels.renderWitch（index/play 同一套救/毒逻辑）。
   if (ask.kind === 'witch') {
     SkillPanels.renderWitch(body, ask, {
-      mkBtn: (text, fn) => {
-        const b = document.createElement('button');
-        b.textContent = text;
-        b.onclick = fn;
-        return b;
-      },
+      mkBtn: skillBtn,
       answer: send,
       done: () => {},
     });

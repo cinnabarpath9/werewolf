@@ -1090,7 +1090,10 @@ class Game:
         rec = decided.get(witch.id) or {}
         curse_id = rec.get("curse")
         if not curse_id:
-            witch.private_events.append(f"第 {day} 夜：你今晚没有诅咒任何人。")
+            # 真人狼巫在 one_proposal 里已经自己落过账（成功或“没用诅咒”）；
+            # 这里再写一条“没有诅咒”会和上一句自相矛盾。
+            if not getattr(witch, "is_human", False):
+                witch.private_events.append(f"第 {day} 夜：你今晚没有诅咒任何人。")
             return
         self._apply_curse_target(day, witch, curse_id)
 
@@ -1586,19 +1589,19 @@ class Game:
                 return wolf, {"target": pre["target"],
                               "reason": "（沿用今晚早先的决定）",
                               "_prefetched": True}
-            human_witch = (wolf.is_human and wolf.role_key == "wolf_witch"
-                           and day >= 2 and self.skill_enabled("wolf_curse"))
+            witch_here = (wolf.role_key == "wolf_witch"
+                          and day >= 2 and self.skill_enabled("wolf_curse"))
             task = Task(
                 kind="wolf_kill",
                 text=(f"现在是第 {day} 天夜晚，狼人行动。请提出今晚要击杀的目标，"
                       f"并给一句理由（队友都能看到你的提议）。"
                       + ("\n⚠️ 你是【狼巫】：先选 `curse` 要诅咒谁（可以 null），再选 `target` 刀谁；"
-                         "诅咒封目标本夜+次日的技能。" if human_witch else "")),
+                         "诅咒封目标本夜+次日的技能。" if witch_here else "")),
                 schema=(('{"curse": <玩家编号或 null>, "target": <玩家编号>, '
-                         '"reason": "<一句话理由>"}') if human_witch else
+                         '"reason": "<一句话理由>"}') if witch_here else
                         '{"target": <玩家编号>, "reason": "<一句话理由>"}'),
                 legal=kill_targets,
-                extra={"good": good_alive, **({"curse_legal": kill_targets} if human_witch else {})},
+                extra={"good": good_alive, **({"curse_legal": kill_targets} if witch_here else {})},
                 required=("target",),
             )
             return wolf, await self.act(wolf, task)
@@ -1629,12 +1632,17 @@ class Game:
             if target is None:
                 target = self.coerce_seat(reply.get("target"), good_alive)
             proposals[wolf.id] = target
-            if (wolf.is_human and wolf.role_key == "wolf_witch" and day >= 2
+            if (wolf.role_key == "wolf_witch" and day >= 2
                     and self.skill_enabled("wolf_curse")
                     and not truthy(reply.get("abstain"), default=False)):
                 curse = self.coerce_seat(reply.get("curse"), kill_targets, default=None)
-                self._apply_curse_target(day, wolf, curse) if curse else wolf.private_events.append(
-                    f"第 {day} 夜：你今晚没有诅咒任何人。")
+                if wolf.is_human:
+                    self._apply_curse_target(day, wolf, curse) if curse else wolf.private_events.append(
+                        f"第 {day} 夜：你今晚没有诅咒任何人。")
+                else:
+                    # decision_first=false 时夜聊/出刀这条老路也要把 AI 狼巫的诅咒带出去。
+                    wolf_intents[wolf.id] = {"target": target, "curse": curse,
+                                             "reason": str(reply.get("reason") or "").strip()[:200]}
             self.ledger.add(day, "night", "night",
                             f"{wolf.id}号 提议击杀 {target}号：{reply.get('reason') or '（未给理由）'}",
                             seat=wolf.id, visible_to=(WOLF,),

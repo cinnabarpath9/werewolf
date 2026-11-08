@@ -247,6 +247,15 @@ def validate_board_skills(board) -> list[str]:
     inactive = [k for k in declared if k not in keys]
     if inactive:
         issues.append(f"{board.name}：skill_order 含本板未激活技能 {inactive}")
+    # 硬依赖：wolf_curse 要读 wolf_kill 的返回；排到前面会整夜静默丢失诅咒。
+    if {"wolf_kill", "wolf_curse"} <= keys:
+        effective = list(active_skills(board))
+        try:
+            if effective.index("wolf_curse") < effective.index("wolf_kill"):
+                issues.append(f"{board.name}：wolf_curse 不能排在 wolf_kill 之前"
+                              f"（当前 {effective}）")
+        except ValueError:
+            pass
     # 每个激活技能至少要有规则/打法/handler 元数据，防止新增技能只写一半。
     for key in sorted(keys):
         sd = SKILLS[key]

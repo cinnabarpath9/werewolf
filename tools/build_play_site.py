@@ -33,8 +33,9 @@ ZIP = os.path.join(ROOT, "dist", f"werewolf-{_site_version()}-在线试玩站.zi
 PY_FILES = [
     "__init__.py", "engine.py", "roles.py", "context.py", "rules.py", "words.py",
     "ledger.py", "tabletalk.py", "persona.py", "llm.py", "agents.py", "browser_glue.py",
+    "skills.py",
 ]
-MD_FILES = ["01_规则书.md", "04_角色书.md", "05_战术书.md", "06_概念库.md"]
+MD_FILES = ["01_规则书.md", "04_角色书.md", "05_战术书.md", "06_概念库.md", "08_技能书.md"]
 
 
 def main() -> int:
@@ -44,6 +45,8 @@ def main() -> int:
 
     # 页面放在根目录（play.html 的取文件逻辑先试 ../ 再试同级，所以同级也能用）
     shutil.copy2(os.path.join(ROOT, "web", "play.html"), os.path.join(OUT, "index.html"))
+    shutil.copy2(os.path.join(ROOT, "web", "skill_panels.js"),
+                  os.path.join(OUT, "skill_panels.js"))
 
     os.makedirs(os.path.join(OUT, "wolf"))
     for name in PY_FILES:
